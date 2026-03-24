@@ -1,13 +1,16 @@
-import { useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   ResponsiveContainer,
-  BarChart,
-  Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { api } from '../api';
+
+const RANGES = ['1W', '1M', '3M', '6M', '1Y', 'All'];
 
 function formatCurrency(v) {
   return new Intl.NumberFormat('en-US', {
@@ -17,44 +20,131 @@ function formatCurrency(v) {
   }).format(v);
 }
 
-export default function PerformanceChart({ holdings }) {
-  const data = useMemo(() => {
-    if (!holdings || holdings.length === 0) return [];
-    return holdings
-      .filter((h) => h.currentValue > 0)
-      .sort((a, b) => b.currentValue - a.currentValue)
-      .slice(0, 10)
-      .map((h) => ({ name: h.symbol, value: h.currentValue }));
-  }, [holdings]);
+function formatDate(dateStr) {
+  const [, month, day] = dateStr.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[parseInt(month, 10) - 1]} ${parseInt(day, 10)}`;
+}
 
-  if (data.length === 0)
-    return <p className="text-gray-500 text-sm">No performance data.</p>;
+function CustomTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-lg">
+      <p className="font-medium text-gray-900">{formatDate(d.date)}</p>
+      <p className="text-gray-600">Value: {formatCurrency(d.totalValue)}</p>
+      <p className={d.dayGainLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+        {d.dayGainLoss >= 0 ? '+' : ''}{formatCurrency(d.dayGainLoss)}
+      </p>
+    </div>
+  );
+}
+
+export default function PerformanceChart() {
+  const [range, setRange] = useState('1M');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await api.getHistory(range.toLowerCase());
+      setData(result);
+    } catch (err) {
+      setError(err.message || 'Failed to load history');
+    } finally {
+      setLoading(false);
+    }
+  }, [range]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   return (
     <div className="rounded-lg bg-white p-6 shadow">
-      <h2 className="mb-1 text-lg font-semibold text-gray-900">
-        Holdings by Value
-      </h2>
-      <p className="mb-4 text-xs text-gray-400">
-        Historical performance data not available with CSV import
-      </p>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-gray-900">
+          Portfolio Performance
+        </h2>
+        <div className="flex gap-1">
+          {RANGES.map((r) => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                range === r
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="h-72">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-            <YAxis
-              tickFormatter={formatCurrency}
-              tick={{ fontSize: 12 }}
-              width={80}
-            />
-            <Tooltip
-              formatter={(value) => [formatCurrency(value), 'Value']}
-              labelStyle={{ fontWeight: 600 }}
-            />
-            <Bar dataKey="value" fill="#4f46e5" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {loading ? (
+          <div className="flex h-full flex-col justify-between">
+            <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
+            <div className="h-48 w-full animate-pulse rounded bg-gray-200" />
+            <div className="h-4 w-full animate-pulse rounded bg-gray-200" />
+          </div>
+        ) : error ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3">
+            <p className="text-sm text-red-600">Failed to load history</p>
+            <button
+              onClick={fetchData}
+              className="rounded-md bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-100"
+            >
+              Retry
+            </button>
+          </div>
+        ) : !data || data.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-center text-sm text-gray-500">
+              No historical data yet. Import a CSV to start tracking.
+            </p>
+          </div>
+        ) : data.length === 1 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2">
+            <p className="text-2xl font-semibold text-gray-900">
+              {formatCurrency(data[0].totalValue)}
+            </p>
+            <p className="text-xs text-gray-500">{formatDate(data[0].date)}</p>
+            <p className="text-sm text-gray-500">
+              Import more CSVs to see trends
+            </p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis
+                dataKey="date"
+                tickFormatter={formatDate}
+                tick={{ fontSize: 12 }}
+              />
+              <YAxis
+                tickFormatter={formatCurrency}
+                tick={{ fontSize: 12 }}
+                width={80}
+              />
+              <Tooltip content={<CustomTooltip />} />
+              <Line
+                type="monotone"
+                dataKey="totalValue"
+                stroke="#4f46e5"
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

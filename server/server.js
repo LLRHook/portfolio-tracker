@@ -8,6 +8,7 @@ import { getQuotes } from './quotes.js';
 import {
   upsertHolding, getHoldings, deleteHoldings, hasHoldings,
   createUser, findUser, getUserCount,
+  insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
 } from './db.js';
 
 const app = express();
@@ -133,9 +134,10 @@ function parseFidelityCsv(csvText) {
   const descIdx = colIndex('Description');
   const qtyIdx = colIndex('Quantity');
   const currentValueIdx = colIncludes('Current Value');
+  const lastPriceIdx = colIncludes('Last Price');
   const avgCostIdx = colIndex('Average Cost Basis');
 
-  if (symbolIdx === -1) return [];
+  if (symbolIdx === -1) return { holdings: [], snapshotDate: new Date().toISOString().split('T')[0] };
 
   const holdings = [];
   for (let i = 1; i < lines.length; i++) {
@@ -178,15 +180,43 @@ function parseFidelityCsv(csvText) {
       costBasis = currentValue;
     }
 
+    const lastPriceStr = lastPriceIdx >= 0 ? stripMoney(fields[lastPriceIdx] || '') : '';
+    let currentPrice = lastPriceStr ? parseFloat(lastPriceStr) : null;
+    if (isNaN(currentPrice)) currentPrice = null;
+
+    // For money market positions (quantity=1), set currentPrice = currentValue
+    if (quantity === 1 && currentPrice == null && !isNaN(currentValue)) {
+      currentPrice = currentValue;
+    }
+
     holdings.push({
       symbol,
       description: descIdx >= 0 ? (fields[descIdx] || '').replace(/^"|"$/g, '').trim() : null,
       quantity,
       costBasis,
+      currentPrice,
+      currentValue: !isNaN(currentValue) ? currentValue : null,
       accountName: acctNameIdx >= 0 ? (fields[acctNameIdx] || '').replace(/^"|"$/g, '').trim() : null,
     });
   }
-  return holdings;
+
+  // Extract snapshot date from CSV footer (e.g. "Date downloaded Mar-24-2026")
+  let snapshotDate = new Date().toISOString().split('T')[0];
+  const months = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
+                   Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const match = lines[i].match(/Date downloaded\s+(\w{3})-(\d{2})-(\d{4})/i);
+    if (match) {
+      const [, mon, day, year] = match;
+      const mm = months[mon.charAt(0).toUpperCase() + mon.slice(1).toLowerCase()];
+      if (mm) {
+        snapshotDate = `${year}-${mm}-${day}`;
+      }
+      break;
+    }
+  }
+
+  return { holdings, snapshotDate };
 }
 
 app.post('/api/import', upload.single('file'), (req, res) => {
@@ -196,18 +226,35 @@ app.post('/api/import', upload.single('file'), (req, res) => {
     }
 
     const csvText = req.file.buffer.toString('utf-8');
-    const holdings = parseFidelityCsv(csvText);
+    const { holdings, snapshotDate } = parseFidelityCsv(csvText);
 
     if (holdings.length === 0) {
       return res.status(400).json({ error: 'No valid holdings found in CSV' });
     }
 
     const userId = getUserId(req);
+    // Clear existing holdings so sold positions don't linger
+    deleteHoldings(userId);
     for (const holding of holdings) {
       upsertHolding(userId, holding);
+      insertSnapshot(userId, snapshotDate, holding);
     }
 
-    res.json({ imported: holdings.length });
+    // Compute and store daily totals
+    let totalValue = 0;
+    let totalCost = 0;
+    for (const h of holdings) {
+      totalValue += (h.currentValue || 0);
+      totalCost += ((h.costBasis || 0) * h.quantity);
+    }
+    insertDailyTotal(userId, snapshotDate, {
+      totalValue,
+      totalCost,
+      dayGainLoss: totalValue - totalCost,
+      holdingsCount: holdings.length,
+    });
+
+    res.json({ imported: holdings.length, snapshotDate });
   } catch (err) {
     console.error('Import error:', err.message);
     res.status(500).json({ error: 'Failed to import CSV' });
@@ -295,6 +342,58 @@ app.delete('/api/holdings', (req, res) => {
     console.error('Error deleting holdings:', err.message);
     res.status(500).json({ error: 'Failed to delete holdings' });
   }
+});
+
+// --- History endpoints ---
+app.get('/api/history', (req, res) => {
+  const userId = getUserId(req);
+  const range = req.query.range || '1m';
+  const endDate = new Date().toISOString().split('T')[0];
+
+  const ranges = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+  let startDate;
+  if (range === 'all') {
+    startDate = '2000-01-01';
+  } else {
+    const d = new Date();
+    d.setDate(d.getDate() - (ranges[range] || 30));
+    startDate = d.toISOString().split('T')[0];
+  }
+
+  const rows = getDailyTotals(userId, startDate, endDate);
+  res.json(rows.map(r => ({
+    date: r.snapshot_date,
+    totalValue: r.total_value,
+    totalCost: r.total_cost,
+    dayGainLoss: r.day_gain_loss,
+    holdingsCount: r.holdings_count,
+  })));
+});
+
+app.get('/api/history/:symbol', (req, res) => {
+  const userId = getUserId(req);
+  const { symbol } = req.params;
+  const range = req.query.range || '1m';
+  const endDate = new Date().toISOString().split('T')[0];
+
+  const ranges = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+  let startDate;
+  if (range === 'all') {
+    startDate = '2000-01-01';
+  } else {
+    const d = new Date();
+    d.setDate(d.getDate() - (ranges[range] || 30));
+    startDate = d.toISOString().split('T')[0];
+  }
+
+  const rows = getHoldingHistory(userId, symbol, startDate, endDate);
+  res.json(rows.map(r => ({
+    date: r.snapshot_date,
+    quantity: r.quantity,
+    costBasis: r.cost_basis,
+    currentPrice: r.current_price,
+    currentValue: r.current_value,
+  })));
 });
 
 export { app };

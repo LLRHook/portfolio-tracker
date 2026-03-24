@@ -112,4 +112,106 @@ export function getUserCount() {
   return userCount.get().count;
 }
 
+// --- Snapshot tables ---
+db.exec(`
+  CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    description TEXT,
+    quantity REAL NOT NULL,
+    cost_basis REAL,
+    current_price REAL,
+    current_value REAL,
+    account_name TEXT,
+    UNIQUE(user_id, snapshot_date, symbol, account_name)
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_totals (
+    id INTEGER PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    total_value REAL NOT NULL,
+    total_cost REAL NOT NULL,
+    day_gain_loss REAL,
+    holdings_count INTEGER,
+    UNIQUE(user_id, snapshot_date)
+  )
+`);
+
+// --- Snapshot CRUD ---
+const insertSnapshotStmt = db.prepare(`
+  INSERT INTO snapshots (user_id, snapshot_date, symbol, description, quantity, cost_basis, current_price, current_value, account_name)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, snapshot_date, symbol, account_name) DO UPDATE SET
+    description = excluded.description,
+    quantity = excluded.quantity,
+    cost_basis = excluded.cost_basis,
+    current_price = excluded.current_price,
+    current_value = excluded.current_value
+`);
+
+const insertDailyTotalStmt = db.prepare(`
+  INSERT INTO daily_totals (user_id, snapshot_date, total_value, total_cost, day_gain_loss, holdings_count)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
+    total_value = excluded.total_value,
+    total_cost = excluded.total_cost,
+    day_gain_loss = excluded.day_gain_loss,
+    holdings_count = excluded.holdings_count
+`);
+
+const getDailyTotalsStmt = db.prepare(
+  'SELECT * FROM daily_totals WHERE user_id = ? AND snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date'
+);
+
+const getHoldingHistoryStmt = db.prepare(
+  'SELECT * FROM snapshots WHERE user_id = ? AND symbol = ? AND snapshot_date BETWEEN ? AND ? ORDER BY snapshot_date'
+);
+
+const getLatestSnapshotDateStmt = db.prepare(
+  'SELECT MAX(snapshot_date) as latest FROM daily_totals WHERE user_id = ?'
+);
+
+export function insertSnapshot(userId, date, holding) {
+  insertSnapshotStmt.run(
+    userId,
+    date,
+    holding.symbol,
+    holding.description || null,
+    holding.quantity,
+    holding.costBasis || null,
+    holding.currentPrice || null,
+    holding.currentValue || null,
+    holding.accountName || null,
+  );
+}
+
+export function insertDailyTotal(userId, date, totals) {
+  insertDailyTotalStmt.run(
+    userId,
+    date,
+    totals.totalValue,
+    totals.totalCost,
+    totals.dayGainLoss || null,
+    totals.holdingsCount || null,
+  );
+}
+
+export function getDailyTotals(userId, startDate, endDate) {
+  return getDailyTotalsStmt.all(userId, startDate, endDate);
+}
+
+export function getHoldingHistory(userId, symbol, startDate, endDate) {
+  return getHoldingHistoryStmt.all(userId, symbol, startDate, endDate);
+}
+
+export function getLatestSnapshotDate(userId) {
+  const row = getLatestSnapshotDateStmt.get(userId);
+  return row ? row.latest : null;
+}
+
 export { db };

@@ -55,4 +55,8 @@ export const api = {
 
   // Delete all holdings
   deleteHoldings: () => request('/holdings', { method: 'DELETE' }),
+
+  // History
+  getHistory: (range = '1m') => request(`/history?range=${range}`),
+  getSymbolHistory: (symbol, range = '1m') => request(`/history/${encodeURIComponent(symbol)}?range=${range}`),
 };

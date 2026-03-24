@@ -65,7 +65,7 @@ export default function Dashboard({ holdings, onLogout, onImportCsv, onClearHold
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <ErrorBoundary>
-            <PerformanceChart holdings={holdings} />
+            <PerformanceChart />
           </ErrorBoundary>
           <ErrorBoundary>
             <AllocationChart holdings={holdings} />
