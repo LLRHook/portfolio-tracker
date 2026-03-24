@@ -21,7 +21,7 @@ A self-hosted portfolio dashboard for tracking brokerage holdings with live mark
 | Layer | Tech |
 |-------|------|
 | Frontend | React 19, Vite, Tailwind CSS v4, Recharts |
-| Backend | Express 5, better-sqlite3, yahoo-finance2 |
+| Backend | Express 5, better-sqlite3 |
 | Auth | bcrypt, express-session |
 | Infra | Docker Compose, Node 22 |
 

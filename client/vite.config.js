@@ -8,7 +8,7 @@ export default defineConfig({
     port: parseInt(process.env.CLIENT_PORT || '34891'),
     proxy: {
       '/api': {
-        target: `http://server:${process.env.SERVER_PORT || '34892'}`,
+        target: `http://host.docker.internal:${process.env.SERVER_PORT || '34892'}`,
         changeOrigin: true,
       },
     },

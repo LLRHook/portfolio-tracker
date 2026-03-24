@@ -4,7 +4,7 @@ import cors from 'cors';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
 import multer from 'multer';
-import yahooFinance from 'yahoo-finance2';
+import { getQuotes } from './quotes.js';
 import {
   upsertHolding, getHoldings, deleteHoldings, hasHoldings,
   createUser, findUser, getUserCount,
@@ -224,22 +224,42 @@ app.get('/api/holdings', async (req, res) => {
       return res.json([]);
     }
 
-    const symbols = [...new Set(rows.map(r => r.symbol))];
+    // Cash/money market positions (quantity=1, stored as lump sum) don't need quotes
+    const isCashPosition = (row) => row.quantity === 1 && row.description?.toUpperCase().includes('MONEY MARKET');
+    const symbols = [...new Set(rows.filter(r => !isCashPosition(r)).map(r => r.symbol))];
 
-    // Fetch live quotes from Yahoo Finance
+    // Fetch live quotes for non-cash positions
     let quotesMap = {};
     try {
-      const quotes = await yahooFinance.quote(symbols, { return: 'object' });
-      quotesMap = quotes || {};
+      if (symbols.length > 0) {
+        quotesMap = await getQuotes(symbols);
+      }
     } catch (quoteErr) {
-      console.error('Yahoo Finance quote error:', quoteErr.message);
+      console.error('Quote fetch error:', quoteErr.message);
     }
 
     const result = rows.map(row => {
+      if (isCashPosition(row)) {
+        const value = row.cost_basis || 0;
+        return {
+          symbol: row.symbol,
+          description: row.description,
+          quantity: row.quantity,
+          costBasis: value,
+          accountName: row.account_name,
+          currentPrice: value,
+          currentValue: value,
+          dayChange: 0,
+          dayChangePercent: 0,
+          gainLoss: 0,
+          gainLossPercent: 0,
+        };
+      }
+
       const q = quotesMap[row.symbol] || {};
       const currentPrice = q.regularMarketPrice || null;
       const currentValue = currentPrice != null ? currentPrice * row.quantity : null;
-      const costBasis = row.cost_basis; // per-share average cost basis
+      const costBasis = row.cost_basis;
       const totalCost = costBasis != null ? costBasis * row.quantity : null;
       const gainLoss = currentValue != null && totalCost != null ? currentValue - totalCost : null;
       const gainLossPercent = gainLoss != null && totalCost ? (gainLoss / totalCost) * 100 : null;

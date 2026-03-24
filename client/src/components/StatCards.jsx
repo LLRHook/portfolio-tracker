@@ -14,8 +14,8 @@ export default function StatCards({ holdings }) {
   if (!holdings || holdings.length === 0) return null;
 
   const totalValue = holdings.reduce((s, h) => s + (h.currentValue || 0), 0);
-  const totalDayChange = holdings.reduce((s, h) => s + (h.dayChange || 0), 0);
-  const totalCostBasis = holdings.reduce((s, h) => s + (h.costBasis || 0), 0);
+  const totalDayChange = holdings.reduce((s, h) => s + (h.dayChange || 0) * (h.quantity || 0), 0);
+  const totalCostBasis = holdings.reduce((s, h) => s + (h.costBasis || 0) * (h.quantity || 0), 0);
   const totalGainLoss = holdings.reduce((s, h) => s + (h.gainLoss || 0), 0);
 
   const dayChangePercent = totalValue > 0 ? (totalDayChange / (totalValue - totalDayChange)) * 100 : 0;
