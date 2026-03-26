@@ -1,76 +1,70 @@
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 const cache = new Map();
 
-async function fetchQuote(symbol) {
-  const url = `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2d&interval=1d`;
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    },
-  });
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+};
 
-  if (!res.ok) {
-    throw new Error(`Yahoo chart API ${res.status} for ${symbol}`);
-  }
+/**
+ * Fetch SPY closing price for a specific date.
+ * Looks back 6 days to handle weekends/holidays.
+ */
+export async function fetchSpyPriceOnDate(dateStr) {
+  const target = new Date(dateStr + 'T20:00:00Z');
+  const period2 = Math.floor(target.getTime() / 1000) + 86400;
+  const period1 = period2 - 6 * 86400;
+
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/SPY?period1=${period1}&period2=${period2}&interval=1d`;
+  const res = await fetch(url, { headers: HEADERS });
+
+  if (!res.ok) throw new Error(`Yahoo SPY fetch failed: ${res.status}`);
 
   const json = await res.json();
   const result = json.chart?.result?.[0];
-  if (!result?.meta) {
-    throw new Error(`No chart data for ${symbol}`);
-  }
+  if (!result) throw new Error('No SPY chart data');
 
-  const regularMarketPrice = result.meta.regularMarketPrice;
-
-  // Determine previous close from the daily close array
   const closes = result.indicators?.quote?.[0]?.close || [];
   const validCloses = closes.filter(c => c != null);
+  if (validCloses.length === 0) throw new Error('No SPY close prices found');
 
-  let previousClose;
-  if (validCloses.length >= 2) {
-    previousClose = validCloses[validCloses.length - 2];
-  } else if (validCloses.length === 1) {
-    // Only one close available (e.g. today's close is null for mutual funds)
-    // Use that close as previous, regularMarketPrice as current
-    previousClose = validCloses[0];
-  } else {
-    previousClose = result.meta.previousClose ?? result.meta.chartPreviousClose;
-  }
-
-  const regularMarketChange = previousClose != null ? regularMarketPrice - previousClose : null;
-  const regularMarketChangePercent = previousClose ? (regularMarketChange / previousClose) * 100 : null;
-
-  return { regularMarketPrice, regularMarketChange, regularMarketChangePercent };
+  return validCloses[validCloses.length - 1];
 }
 
-export async function getQuotes(symbols) {
-  const now = Date.now();
-  const results = {};
-  const toFetch = [];
+/**
+ * Fetch SPY historical daily closes for a date range.
+ * Returns array of { date: "YYYY-MM-DD", close: number }.
+ */
+export async function fetchSpyHistory(startDate, endDate) {
+  const cacheKey = `${startDate}:${endDate}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
 
-  for (const symbol of symbols) {
-    const cached = cache.get(symbol);
-    if (cached && now - cached.timestamp < CACHE_TTL) {
-      results[symbol] = cached.data;
-    } else {
-      toFetch.push(symbol);
+  const period1 = Math.floor(new Date(startDate + 'T00:00:00Z').getTime() / 1000);
+  const period2 = Math.floor(new Date(endDate + 'T23:59:59Z').getTime() / 1000);
+
+  const url = `https://query2.finance.yahoo.com/v8/finance/chart/SPY?period1=${period1}&period2=${period2}&interval=1d`;
+  const res = await fetch(url, { headers: HEADERS });
+
+  if (!res.ok) throw new Error(`Yahoo SPY history fetch failed: ${res.status}`);
+
+  const json = await res.json();
+  const result = json.chart?.result?.[0];
+  if (!result) throw new Error('No SPY history data');
+
+  const timestamps = result.timestamp || [];
+  const closes = result.indicators?.quote?.[0]?.close || [];
+
+  const data = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] != null) {
+      const d = new Date(timestamps[i] * 1000);
+      const dateStr = d.toISOString().split('T')[0];
+      data.push({ date: dateStr, close: closes[i] });
     }
   }
 
-  if (toFetch.length > 0) {
-    const settled = await Promise.allSettled(
-      toFetch.map(s => fetchQuote(s).then(data => ({ symbol: s, data })))
-    );
-
-    for (const result of settled) {
-      if (result.status === 'fulfilled') {
-        const { symbol, data } = result.value;
-        cache.set(symbol, { data, timestamp: now });
-        results[symbol] = data;
-      } else {
-        console.error('Quote fetch failed:', result.reason.message);
-      }
-    }
-  }
-
-  return results;
+  cache.set(cacheKey, { data, timestamp: Date.now() });
+  return data;
 }

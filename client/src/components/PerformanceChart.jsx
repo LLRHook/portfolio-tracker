@@ -7,6 +7,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
 } from 'recharts';
 import { api } from '../api';
 
@@ -32,10 +33,17 @@ function CustomTooltip({ active, payload }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-lg">
       <p className="font-medium text-gray-900">{formatDate(d.date)}</p>
-      <p className="text-gray-600">Value: {formatCurrency(d.totalValue)}</p>
-      <p className={d.dayGainLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
-        {d.dayGainLoss >= 0 ? '+' : ''}{formatCurrency(d.dayGainLoss)}
-      </p>
+      {d.totalValue != null && (
+        <p className="text-indigo-600">Portfolio: {formatCurrency(d.totalValue)}</p>
+      )}
+      {d.spValue != null && (
+        <p className="text-orange-500">S&P 500: {formatCurrency(d.spValue)}</p>
+      )}
+      {d.dayGainLoss != null && (
+        <p className={d.dayGainLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+          {d.dayGainLoss >= 0 ? '+' : ''}{formatCurrency(d.dayGainLoss)}
+        </p>
+      )}
     </div>
   );
 }
@@ -43,6 +51,7 @@ function CustomTooltip({ active, payload }) {
 export default function PerformanceChart() {
   const [range, setRange] = useState('1M');
   const [data, setData] = useState(null);
+  const [portfolioPointCount, setPortfolioPointCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -51,7 +60,22 @@ export default function PerformanceChart() {
     setError(null);
     try {
       const result = await api.getHistory(range.toLowerCase());
-      setData(result);
+      const { portfolio = [], benchmark = [] } = result;
+
+      // Merge portfolio and benchmark into a single timeline for recharts
+      const map = new Map();
+      for (const p of portfolio) {
+        map.set(p.date, { date: p.date, totalValue: p.totalValue, dayGainLoss: p.dayGainLoss });
+      }
+      for (const b of benchmark) {
+        const existing = map.get(b.date) || { date: b.date };
+        existing.spValue = b.spValue;
+        map.set(b.date, existing);
+      }
+
+      const merged = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+      setData(merged);
+      setPortfolioPointCount(portfolio.length);
     } catch (err) {
       setError(err.message || 'Failed to load history');
     } finally {
@@ -103,18 +127,20 @@ export default function PerformanceChart() {
               Retry
             </button>
           </div>
-        ) : !data || data.length === 0 ? (
+        ) : portfolioPointCount === 0 ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-center text-sm text-gray-500">
               No historical data yet. Import a CSV to start tracking.
             </p>
           </div>
-        ) : data.length === 1 ? (
+        ) : portfolioPointCount === 1 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2">
             <p className="text-2xl font-semibold text-gray-900">
-              {formatCurrency(data[0].totalValue)}
+              {formatCurrency(data.find(d => d.totalValue != null)?.totalValue || 0)}
             </p>
-            <p className="text-xs text-gray-500">{formatDate(data[0].date)}</p>
+            <p className="text-xs text-gray-500">
+              {formatDate(data.find(d => d.totalValue != null)?.date || '')}
+            </p>
             <p className="text-sm text-gray-500">
               Import more CSVs to see trends
             </p>
@@ -134,13 +160,26 @@ export default function PerformanceChart() {
                 width={80}
               />
               <Tooltip content={<CustomTooltip />} />
+              <Legend />
               <Line
                 type="monotone"
                 dataKey="totalValue"
+                name="Portfolio"
                 stroke="#4f46e5"
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
+                connectNulls
+              />
+              <Line
+                type="monotone"
+                dataKey="spValue"
+                name="S&P 500"
+                stroke="#f97316"
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4 }}
+                connectNulls
               />
             </LineChart>
           </ResponsiveContainer>

@@ -4,11 +4,12 @@ import cors from 'cors';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
 import multer from 'multer';
-import { getQuotes } from './quotes.js';
+import { fetchSpyPriceOnDate, fetchSpyHistory } from './quotes.js';
 import {
   upsertHolding, getHoldings, deleteHoldings, hasHoldings,
   createUser, findUser, getUserCount,
   insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
+  getPreviousDailyTotal, getLatestSnapshotPrices,
 } from './db.js';
 
 const app = express();
@@ -134,7 +135,8 @@ function parseFidelityCsv(csvText) {
   const descIdx = colIndex('Description');
   const qtyIdx = colIndex('Quantity');
   const currentValueIdx = colIncludes('Current Value');
-  const lastPriceIdx = colIncludes('Last Price');
+  const lastPriceIdx = colIndex('Last Price');
+  const lastPriceChangeIdx = colIndex('Last Price Change');
   const avgCostIdx = colIndex('Average Cost Basis');
 
   if (symbolIdx === -1) return { holdings: [], snapshotDate: new Date().toISOString().split('T')[0] };
@@ -184,6 +186,10 @@ function parseFidelityCsv(csvText) {
     let currentPrice = lastPriceStr ? parseFloat(lastPriceStr) : null;
     if (isNaN(currentPrice)) currentPrice = null;
 
+    const lastPriceChangeStr = lastPriceChangeIdx >= 0 ? stripMoney(fields[lastPriceChangeIdx] || '') : '';
+    let lastPriceChange = lastPriceChangeStr ? parseFloat(lastPriceChangeStr) : 0;
+    if (isNaN(lastPriceChange)) lastPriceChange = 0;
+
     // For money market positions (quantity=1), set currentPrice = currentValue
     if (quantity === 1 && currentPrice == null && !isNaN(currentValue)) {
       currentPrice = currentValue;
@@ -195,6 +201,7 @@ function parseFidelityCsv(csvText) {
       quantity,
       costBasis,
       currentPrice,
+      lastPriceChange,
       currentValue: !isNaN(currentValue) ? currentValue : null,
       accountName: acctNameIdx >= 0 ? (fields[acctNameIdx] || '').replace(/^"|"$/g, '').trim() : null,
     });
@@ -219,7 +226,7 @@ function parseFidelityCsv(csvText) {
   return { holdings, snapshotDate };
 }
 
-app.post('/api/import', upload.single('file'), (req, res) => {
+app.post('/api/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -240,29 +247,54 @@ app.post('/api/import', upload.single('file'), (req, res) => {
       insertSnapshot(userId, snapshotDate, holding);
     }
 
-    // Compute and store daily totals
+    // Compute daily totals
     let totalValue = 0;
     let totalCost = 0;
+    let totalDayChange = 0;
     for (const h of holdings) {
       totalValue += (h.currentValue || 0);
       totalCost += ((h.costBasis || 0) * h.quantity);
+      totalDayChange += (h.lastPriceChange || 0) * h.quantity;
     }
+
+    // SPY shares calculation (buy-and-hold benchmark)
+    let spyShares = 0;
+    const prev = getPreviousDailyTotal(userId, snapshotDate);
+    try {
+      const spyPrice = await fetchSpyPriceOnDate(snapshotDate);
+      if (!prev || !prev.spy_shares) {
+        // First import or first after upgrade: buy all in
+        spyShares = totalCost / spyPrice;
+      } else if (totalCost > prev.total_cost) {
+        // New capital added: buy additional SPY shares
+        const delta = totalCost - prev.total_cost;
+        spyShares = prev.spy_shares + (delta / spyPrice);
+      } else {
+        // Same or less capital: hold (never sell)
+        spyShares = prev.spy_shares;
+      }
+    } catch (err) {
+      console.error('SPY price fetch failed during import:', err.message);
+      spyShares = prev?.spy_shares || 0;
+    }
+
     insertDailyTotal(userId, snapshotDate, {
       totalValue,
       totalCost,
-      dayGainLoss: totalValue - totalCost,
+      dayGainLoss: totalDayChange,
       holdingsCount: holdings.length,
+      spyShares,
     });
 
-    res.json({ imported: holdings.length, snapshotDate });
+    res.json({ imported: holdings.length, snapshotDate, spyShares });
   } catch (err) {
     console.error('Import error:', err.message);
     res.status(500).json({ error: 'Failed to import CSV' });
   }
 });
 
-// --- Holdings with live quotes ---
-app.get('/api/holdings', async (req, res) => {
+// --- Holdings (CSV data only, no live quotes) ---
+app.get('/api/holdings', (req, res) => {
   try {
     const userId = getUserId(req);
     const rows = getHoldings(userId);
@@ -271,45 +303,25 @@ app.get('/api/holdings', async (req, res) => {
       return res.json([]);
     }
 
-    // Cash/money market positions (quantity=1, stored as lump sum) don't need quotes
-    const isCashPosition = (row) => row.quantity === 1 && row.description?.toUpperCase().includes('MONEY MARKET');
-    const symbols = [...new Set(rows.filter(r => !isCashPosition(r)).map(r => r.symbol))];
-
-    // Fetch live quotes for non-cash positions
-    let quotesMap = {};
-    try {
-      if (symbols.length > 0) {
-        quotesMap = await getQuotes(symbols);
-      }
-    } catch (quoteErr) {
-      console.error('Quote fetch error:', quoteErr.message);
+    // Get prices from the most recent snapshot
+    const snapshotPrices = getLatestSnapshotPrices(userId);
+    const priceMap = new Map();
+    for (const sp of snapshotPrices) {
+      priceMap.set(`${sp.symbol}:${sp.account_name || ''}`, sp);
     }
 
     const result = rows.map(row => {
-      if (isCashPosition(row)) {
-        const value = row.cost_basis || 0;
-        return {
-          symbol: row.symbol,
-          description: row.description,
-          quantity: row.quantity,
-          costBasis: value,
-          accountName: row.account_name,
-          currentPrice: value,
-          currentValue: value,
-          dayChange: 0,
-          dayChangePercent: 0,
-          gainLoss: 0,
-          gainLossPercent: 0,
-        };
-      }
-
-      const q = quotesMap[row.symbol] || {};
-      const currentPrice = q.regularMarketPrice || null;
-      const currentValue = currentPrice != null ? currentPrice * row.quantity : null;
+      const sp = priceMap.get(`${row.symbol}:${row.account_name || ''}`) || {};
+      const currentPrice = sp.current_price || null;
+      const currentValue = sp.current_value || null;
       const costBasis = row.cost_basis;
       const totalCost = costBasis != null ? costBasis * row.quantity : null;
       const gainLoss = currentValue != null && totalCost != null ? currentValue - totalCost : null;
       const gainLossPercent = gainLoss != null && totalCost ? (gainLoss / totalCost) * 100 : null;
+
+      const dayChange = row.last_price_change || 0;
+      const prevPrice = currentPrice != null ? currentPrice - dayChange : null;
+      const dayChangePercent = prevPrice ? (dayChange / prevPrice) * 100 : null;
 
       return {
         symbol: row.symbol,
@@ -319,8 +331,8 @@ app.get('/api/holdings', async (req, res) => {
         accountName: row.account_name,
         currentPrice,
         currentValue,
-        dayChange: q.regularMarketChange || null,
-        dayChangePercent: q.regularMarketChangePercent || null,
+        dayChange,
+        dayChangePercent,
         gainLoss,
         gainLossPercent,
       };
@@ -345,7 +357,7 @@ app.delete('/api/holdings', (req, res) => {
 });
 
 // --- History endpoints ---
-app.get('/api/history', (req, res) => {
+app.get('/api/history', async (req, res) => {
   const userId = getUserId(req);
   const range = req.query.range || '1m';
   const endDate = new Date().toISOString().split('T')[0];
@@ -361,13 +373,50 @@ app.get('/api/history', (req, res) => {
   }
 
   const rows = getDailyTotals(userId, startDate, endDate);
-  res.json(rows.map(r => ({
+
+  const portfolio = rows.map(r => ({
     date: r.snapshot_date,
     totalValue: r.total_value,
     totalCost: r.total_cost,
     dayGainLoss: r.day_gain_loss,
     holdingsCount: r.holdings_count,
-  })));
+    spyShares: r.spy_shares,
+  }));
+
+  // Build the S&P 500 benchmark line
+  let benchmark = [];
+  try {
+    if (rows.length > 0) {
+      const spyStart = rows[0].snapshot_date;
+      const spyHistory = await fetchSpyHistory(spyStart, endDate);
+
+      // Build timeline of spy_shares changes
+      const sharesTimeline = rows
+        .filter(r => r.spy_shares > 0)
+        .map(r => ({ date: r.snapshot_date, shares: r.spy_shares }));
+
+      if (sharesTimeline.length > 0) {
+        benchmark = spyHistory.map(day => {
+          // Find the most recent spy_shares on or before this day
+          let shares = 0;
+          for (let i = sharesTimeline.length - 1; i >= 0; i--) {
+            if (sharesTimeline[i].date <= day.date) {
+              shares = sharesTimeline[i].shares;
+              break;
+            }
+          }
+          return {
+            date: day.date,
+            spValue: shares > 0 ? shares * day.close : null,
+          };
+        }).filter(d => d.spValue != null);
+      }
+    }
+  } catch (err) {
+    console.error('SPY history fetch failed:', err.message);
+  }
+
+  res.json({ portfolio, benchmark });
 });
 
 app.get('/api/history/:symbol', (req, res) => {

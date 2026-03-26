@@ -18,6 +18,7 @@ db.exec(`
     description TEXT,
     quantity REAL NOT NULL,
     cost_basis REAL,
+    last_price_change REAL,
     account_name TEXT,
     imported_at TEXT DEFAULT (datetime('now')),
     UNIQUE(user_id, symbol, account_name)
@@ -32,6 +33,14 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   )
 `);
+
+// --- Migrations ---
+try {
+  db.exec('ALTER TABLE holdings ADD COLUMN last_price_change REAL');
+} catch (_) { /* column already exists */ }
+try {
+  db.exec('ALTER TABLE daily_totals ADD COLUMN spy_shares REAL DEFAULT 0');
+} catch (_) { /* column already exists */ }
 
 // --- Encryption helpers ---
 const ALGORITHM = 'aes-256-gcm';
@@ -59,12 +68,13 @@ function decrypt(ciphertext) {
 
 // --- Holdings CRUD ---
 const upsertHoldingStmt = db.prepare(`
-  INSERT INTO holdings (user_id, symbol, description, quantity, cost_basis, account_name)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO holdings (user_id, symbol, description, quantity, cost_basis, last_price_change, account_name)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(user_id, symbol, account_name) DO UPDATE SET
     description = excluded.description,
     quantity = excluded.quantity,
     cost_basis = excluded.cost_basis,
+    last_price_change = excluded.last_price_change,
     imported_at = datetime('now')
 `);
 
@@ -79,6 +89,7 @@ export function upsertHolding(userId, holding) {
     holding.description || null,
     holding.quantity,
     holding.costBasis || null,
+    holding.lastPriceChange || null,
     holding.accountName || null,
   );
 }
@@ -155,13 +166,14 @@ const insertSnapshotStmt = db.prepare(`
 `);
 
 const insertDailyTotalStmt = db.prepare(`
-  INSERT INTO daily_totals (user_id, snapshot_date, total_value, total_cost, day_gain_loss, holdings_count)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO daily_totals (user_id, snapshot_date, total_value, total_cost, day_gain_loss, holdings_count, spy_shares)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(user_id, snapshot_date) DO UPDATE SET
     total_value = excluded.total_value,
     total_cost = excluded.total_cost,
     day_gain_loss = excluded.day_gain_loss,
-    holdings_count = excluded.holdings_count
+    holdings_count = excluded.holdings_count,
+    spy_shares = excluded.spy_shares
 `);
 
 const getDailyTotalsStmt = db.prepare(
@@ -175,6 +187,17 @@ const getHoldingHistoryStmt = db.prepare(
 const getLatestSnapshotDateStmt = db.prepare(
   'SELECT MAX(snapshot_date) as latest FROM daily_totals WHERE user_id = ?'
 );
+
+const getPreviousDailyTotalStmt = db.prepare(
+  'SELECT * FROM daily_totals WHERE user_id = ? AND snapshot_date < ? ORDER BY snapshot_date DESC LIMIT 1'
+);
+
+const getLatestSnapshotPricesStmt = db.prepare(`
+  SELECT symbol, account_name, current_price, current_value
+  FROM snapshots WHERE user_id = ? AND snapshot_date = (
+    SELECT MAX(snapshot_date) FROM snapshots WHERE user_id = ?
+  )
+`);
 
 export function insertSnapshot(userId, date, holding) {
   insertSnapshotStmt.run(
@@ -198,6 +221,7 @@ export function insertDailyTotal(userId, date, totals) {
     totals.totalCost,
     totals.dayGainLoss || null,
     totals.holdingsCount || null,
+    totals.spyShares || 0,
   );
 }
 
@@ -212,6 +236,14 @@ export function getHoldingHistory(userId, symbol, startDate, endDate) {
 export function getLatestSnapshotDate(userId) {
   const row = getLatestSnapshotDateStmt.get(userId);
   return row ? row.latest : null;
+}
+
+export function getPreviousDailyTotal(userId, beforeDate) {
+  return getPreviousDailyTotalStmt.get(userId, beforeDate) || null;
+}
+
+export function getLatestSnapshotPrices(userId) {
+  return getLatestSnapshotPricesStmt.all(userId, userId);
 }
 
 export { db };
