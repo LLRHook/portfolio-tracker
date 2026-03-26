@@ -21,6 +21,12 @@ export default function HoldingsTable({ holdings }) {
         av = a.currentValue || 0;
         bv = b.currentValue || 0;
       }
+      if (sortKey === 'contribution') {
+        const aAlloc = totalValue > 0 ? (a.currentValue || 0) / totalValue : 0;
+        const bAlloc = totalValue > 0 ? (b.currentValue || 0) / totalValue : 0;
+        av = (a.gainLossPercent || 0) * aAlloc;
+        bv = (b.gainLossPercent || 0) * bAlloc;
+      }
       if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
       return sortAsc ? av - bv : bv - av;
     });
@@ -42,6 +48,7 @@ export default function HoldingsTable({ holdings }) {
     { key: 'currentValue', label: 'Value' },
     { key: 'dayChangePercent', label: 'Day %' },
     { key: 'gainLossPercent', label: 'Gain/Loss %' },
+    { key: 'contribution', label: 'Contrib' },
     { key: 'allocation', label: 'Alloc %' },
   ];
 
@@ -82,6 +89,14 @@ export default function HoldingsTable({ holdings }) {
                   {(h.gainLossPercent || 0) >= 0 ? '+' : ''}
                   {(h.gainLossPercent || 0).toFixed(2)}%
                 </td>
+                {(() => {
+                  const contrib = (h.gainLossPercent || 0) * (alloc / 100);
+                  return (
+                    <td className={`px-4 py-3 text-right font-medium ${contrib >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {contrib >= 0 ? '+' : ''}{contrib.toFixed(2)}%
+                    </td>
+                  );
+                })()}
                 <td className="px-4 py-3 text-right text-slate-400">
                   {alloc.toFixed(1)}%
                 </td>
