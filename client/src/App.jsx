@@ -1,68 +1,44 @@
-import { useState, useEffect } from 'react';
-import { useAuth } from './context/AuthContext';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from './api';
 import Dashboard from './components/Dashboard';
 import CsvUpload from './components/CsvUpload';
-import Login from './components/Login';
 
 function App() {
-  const { user, checked, logout } = useAuth();
   const [holdings, setHoldings] = useState(null);
-  const [loadingHoldings, setLoadingHoldings] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
 
+  const fetchHoldings = useCallback(() => {
+    setLoading(true);
+    api
+      .getHoldings()
+      .then((data) => {
+        const list = data.holdings || data;
+        setHoldings(Array.isArray(list) ? list : []);
+      })
+      .catch(() => setHoldings([]))
+      .finally(() => setLoading(false));
+  }, []);
+
   useEffect(() => {
-    if (user) {
-      setLoadingHoldings(true);
-      api
-        .getHoldings()
-        .then((data) => {
-          const list = data.holdings || data;
-          setHoldings(Array.isArray(list) ? list : []);
-        })
-        .catch(() => setHoldings([]))
-        .finally(() => setLoadingHoldings(false));
-    } else {
-      setHoldings(null);
-      setShowUpload(false);
-    }
-  }, [user]);
+    fetchHoldings();
+  }, [fetchHoldings]);
 
-  if (!checked) {
+  if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Login />;
-  }
-
-  if (loadingHoldings) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-cyan-500 border-t-transparent" />
       </div>
     );
   }
 
   if (!holdings || holdings.length === 0 || showUpload) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen">
         <CsvUpload
           onSuccess={() => {
             setShowUpload(false);
-            setLoadingHoldings(true);
-            api
-              .getHoldings()
-              .then((data) => {
-                const list = data.holdings || data;
-                setHoldings(Array.isArray(list) ? list : []);
-              })
-              .catch(() => setHoldings([]))
-              .finally(() => setLoadingHoldings(false));
+            fetchHoldings();
           }}
         />
       </div>
@@ -72,7 +48,6 @@ function App() {
   return (
     <Dashboard
       holdings={holdings}
-      onLogout={logout}
       onImportCsv={() => setShowUpload(true)}
       onClearHoldings={() => setHoldings([])}
     />
