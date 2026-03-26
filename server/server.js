@@ -283,23 +283,42 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     const newSymbols = new Set(holdings.map(h => `${h.symbol}:${h.accountName ?? ''}`));
     const sold = previousHoldings.filter(h => !newSymbols.has(`${h.symbol}:${h.account_name ?? ''}`));
 
-    // Get last known prices for sold positions from snapshots
+    // Estimate sale price for sold positions using portfolio arithmetic:
+    // sale_proceeds = prev_position_value + (V_today - V_prev - dayChange_today)
+    // Assumes one position sold at a time.
     const snapshotPrices = getLatestSnapshotPrices(userId);
     const priceMap = new Map();
     for (const sp of snapshotPrices) {
-      priceMap.set(`${sp.symbol}:${sp.account_name ?? ''}`, sp.current_price);
+      priceMap.set(`${sp.symbol}:${sp.account_name ?? ''}`, sp);
+    }
+
+    let soldEstimates = [];
+    if (sold.length === 1 && prev) {
+      const s = sold[0];
+      const sp = priceMap.get(`${s.symbol}:${s.account_name ?? ''}`);
+      const prevPositionValue = sp?.current_value ?? (s.cost_basis ?? 0) * s.quantity;
+      const saleImpact = (totalValue - prev.total_value) - totalDayChange;
+      const saleProceeds = prevPositionValue + saleImpact;
+      const salePrice = s.quantity > 0 ? saleProceeds / s.quantity : s.cost_basis;
+      soldEstimates.push({ ...s, estimatedSalePrice: salePrice });
+    } else {
+      // Multiple sales or no previous data — fall back to last snapshot price
+      soldEstimates = sold.map(s => {
+        const sp = priceMap.get(`${s.symbol}:${s.account_name ?? ''}`);
+        return { ...s, estimatedSalePrice: sp?.current_price ?? s.cost_basis };
+      });
     }
 
     // Wrap all DB writes in a single transaction for atomicity and performance
     const importTransaction = db.transaction(() => {
-      // Log closed positions
-      for (const s of sold) {
+      // Log closed positions with estimated sale prices
+      for (const s of soldEstimates) {
         insertClosedPosition(userId, {
           symbol: s.symbol,
           description: s.description,
           quantity: s.quantity,
           cost_basis: s.cost_basis,
-          last_price: priceMap.get(`${s.symbol}:${s.account_name ?? ''}`) ?? s.cost_basis,
+          last_price: s.estimatedSalePrice,
           close_date: snapshotDate,
           account_name: s.account_name,
         });
