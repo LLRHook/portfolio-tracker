@@ -34,17 +34,17 @@ export function ToastProvider({ children }) {
 }
 
 const typeStyles = {
-  info: 'bg-white border-indigo-500 text-gray-900',
-  success: 'bg-white border-green-500 text-gray-900',
-  error: 'bg-white border-red-500 text-gray-900',
-  warning: 'bg-white border-yellow-500 text-gray-900',
+  info: 'glass border-cyan-500/50 text-slate-200',
+  success: 'glass border-emerald-500/50 text-slate-200',
+  error: 'glass border-rose-500/50 text-slate-200',
+  warning: 'glass border-amber-500/50 text-slate-200',
 };
 
 const iconColors = {
-  info: 'text-indigo-500',
-  success: 'text-green-500',
-  error: 'text-red-500',
-  warning: 'text-yellow-500',
+  info: 'text-cyan-400',
+  success: 'text-emerald-400',
+  error: 'text-rose-400',
+  warning: 'text-amber-400',
 };
 
 function ToastItem({ toast, onClose }) {
@@ -70,7 +70,7 @@ function ToastItem({ toast, onClose }) {
       <p className="flex-1 text-sm">{toast.message}</p>
       <button
         onClick={onClose}
-        className="text-gray-400 hover:text-gray-600"
+        className="text-slate-500 hover:text-white"
       >
         &times;
       </button>

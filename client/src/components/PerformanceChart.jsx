@@ -31,16 +31,16 @@ function CustomTooltip({ active, payload }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-lg">
-      <p className="font-medium text-gray-900">{formatDate(d.date)}</p>
+    <div className="glass rounded-lg px-3 py-2 text-sm shadow-xl">
+      <p className="font-medium text-white">{formatDate(d.date)}</p>
       {d.totalValue != null && (
-        <p className="text-indigo-600">Portfolio: {formatCurrency(d.totalValue)}</p>
+        <p className="text-cyan-400">Portfolio: {formatCurrency(d.totalValue)}</p>
       )}
       {d.spValue != null && (
-        <p className="text-orange-500">S&P 500: {formatCurrency(d.spValue)}</p>
+        <p className="text-orange-400">S&P 500: {formatCurrency(d.spValue)}</p>
       )}
       {d.dayGainLoss != null && (
-        <p className={d.dayGainLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+        <p className={d.dayGainLoss >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
           {d.dayGainLoss >= 0 ? '+' : ''}{formatCurrency(d.dayGainLoss)}
         </p>
       )}
@@ -52,13 +52,13 @@ function SinglePointView({ data }) {
   const point = data.find(d => d.totalValue != null);
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2">
-      <p className="text-2xl font-semibold text-gray-900">
+      <p className="text-2xl font-semibold text-white">
         {formatCurrency(point?.totalValue || 0)}
       </p>
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-slate-400">
         {formatDate(point?.date || '')}
       </p>
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-slate-500">
         Import more CSVs to see trends
       </p>
     </div>
@@ -78,7 +78,6 @@ export default function PerformanceChart() {
       const result = await api.getHistory(range.toLowerCase());
       const { portfolio = [], benchmark = [] } = result;
 
-      // Merge portfolio and benchmark into a single timeline for recharts
       const map = new Map();
       for (const p of portfolio) {
         map.set(p.date, { date: p.date, totalValue: p.totalValue, dayGainLoss: p.dayGainLoss });
@@ -108,9 +107,9 @@ export default function PerformanceChart() {
   );
 
   return (
-    <div className="rounded-lg bg-white p-6 shadow">
+    <div className="glass rounded-2xl p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">
+        <h2 className="text-lg font-semibold text-white">
           Portfolio Performance
         </h2>
         <div className="flex gap-1">
@@ -118,10 +117,10 @@ export default function PerformanceChart() {
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+              className={`rounded-lg px-3 py-1 text-xs font-medium transition ${
                 range === r
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                  : 'text-slate-400 hover:text-white hover:bg-white/5'
               }`}
             >
               {r}
@@ -133,23 +132,23 @@ export default function PerformanceChart() {
       <div className="h-72">
         {loading ? (
           <div className="flex h-full flex-col justify-between">
-            <div className="h-4 w-24 animate-pulse rounded bg-gray-200" />
-            <div className="h-48 w-full animate-pulse rounded bg-gray-200" />
-            <div className="h-4 w-full animate-pulse rounded bg-gray-200" />
+            <div className="h-4 w-24 animate-pulse rounded bg-white/10" />
+            <div className="h-48 w-full animate-pulse rounded bg-white/5" />
+            <div className="h-4 w-full animate-pulse rounded bg-white/10" />
           </div>
         ) : error ? (
           <div className="flex h-full flex-col items-center justify-center gap-3">
-            <p className="text-sm text-red-600">Failed to load history</p>
+            <p className="text-sm text-rose-400">Failed to load history</p>
             <button
               onClick={fetchData}
-              className="rounded-md bg-indigo-50 px-3 py-1.5 text-sm font-medium text-indigo-700 transition hover:bg-indigo-100"
+              className="rounded-lg bg-cyan-500/10 border border-cyan-500/30 px-3 py-1.5 text-sm font-medium text-cyan-400 transition hover:bg-cyan-500/20"
             >
               Retry
             </button>
           </div>
         ) : portfolioPointCount === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-center text-sm text-gray-500">
+            <p className="text-center text-sm text-slate-500">
               No historical data yet. Import a CSV to start tracking.
             </p>
           </div>
@@ -158,27 +157,34 @@ export default function PerformanceChart() {
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="date"
                 tickFormatter={formatDate}
-                tick={{ fontSize: 12 }}
+                tick={{ fontSize: 12, fill: '#64748b' }}
+                axisLine={{ stroke: 'rgba(255,255,255,0.1)' }}
+                tickLine={false}
               />
               <YAxis
                 tickFormatter={formatCurrency}
-                tick={{ fontSize: 12 }}
+                tick={{ fontSize: 12, fill: '#64748b' }}
+                axisLine={false}
+                tickLine={false}
                 width={80}
               />
               <Tooltip content={<CustomTooltip />} />
-              <Legend />
+              <Legend
+                wrapperStyle={{ paddingTop: '8px' }}
+                formatter={(value) => <span className="text-slate-300 text-xs">{value}</span>}
+              />
               <Line
                 type="monotone"
                 dataKey="totalValue"
                 name="Portfolio"
-                stroke="#4f46e5"
+                stroke="#22d3ee"
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4 }}
+                activeDot={{ r: 4, fill: '#22d3ee' }}
                 connectNulls
               />
               <Line
@@ -188,7 +194,7 @@ export default function PerformanceChart() {
                 stroke="#f97316"
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4 }}
+                activeDot={{ r: 4, fill: '#f97316' }}
                 connectNulls
               />
             </LineChart>

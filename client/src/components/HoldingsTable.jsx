@@ -27,16 +27,12 @@ export default function HoldingsTable({ holdings }) {
   }, [holdings, sortKey, sortAsc]);
 
   function handleSort(key) {
-    if (key === sortKey) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortKey(key);
-      setSortAsc(false);
-    }
+    if (key === sortKey) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(false); }
   }
 
   if (holdings.length === 0)
-    return <p className="text-gray-500 text-sm">No holdings found.</p>;
+    return <p className="text-slate-500 text-sm">No holdings found.</p>;
 
   const columns = [
     { key: 'symbol', label: 'Symbol' },
@@ -52,49 +48,41 @@ export default function HoldingsTable({ holdings }) {
   const arrow = sortAsc ? ' \u25B2' : ' \u25BC';
 
   return (
-    <div className="overflow-x-auto rounded-lg bg-white shadow">
-      <table className="min-w-full divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50">
+    <div className="glass overflow-x-auto rounded-2xl">
+      <table className="min-w-full divide-y divide-white/5 text-sm">
+        <thead>
           <tr>
             {columns.map((col) => (
               <th
                 key={col.key}
                 onClick={() => handleSort(col.key)}
-                className="cursor-pointer px-4 py-3 text-left font-medium text-gray-500 select-none hover:text-gray-700"
+                className="cursor-pointer px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400 select-none hover:text-cyan-400 transition"
               >
                 {col.label}
-                {sortKey === col.key ? arrow : ''}
+                {sortKey === col.key ? <span className="text-cyan-400">{arrow}</span> : ''}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-white/5">
           {sorted.map((h) => {
             const alloc = totalValue > 0 ? ((h.currentValue || 0) / totalValue) * 100 : 0;
             return (
-              <tr key={h.symbol} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-900">{h.symbol}</td>
-                <td className="px-4 py-3 text-gray-600">{h.description}</td>
-                <td className="px-4 py-3 text-right text-gray-900">{h.quantity}</td>
-                <td className="px-4 py-3 text-right text-gray-900">{formatCurrency(h.currentPrice)}</td>
-                <td className="px-4 py-3 text-right text-gray-900">{formatCurrency(h.currentValue)}</td>
-                <td
-                  className={`px-4 py-3 text-right font-medium ${
-                    (h.dayChangePercent || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}
-                >
+              <tr key={h.symbol} className="transition hover:bg-white/[0.03]">
+                <td className="px-4 py-3 font-medium text-cyan-400">{h.symbol}</td>
+                <td className="px-4 py-3 text-slate-300">{h.description}</td>
+                <td className="px-4 py-3 text-right text-slate-200">{h.quantity}</td>
+                <td className="px-4 py-3 text-right text-slate-200">{formatCurrency(h.currentPrice)}</td>
+                <td className="px-4 py-3 text-right text-white font-medium">{formatCurrency(h.currentValue)}</td>
+                <td className={`px-4 py-3 text-right font-medium ${(h.dayChangePercent || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {(h.dayChangePercent || 0) >= 0 ? '+' : ''}
                   {(h.dayChangePercent || 0).toFixed(2)}%
                 </td>
-                <td
-                  className={`px-4 py-3 text-right font-medium ${
-                    (h.gainLossPercent || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}
-                >
+                <td className={`px-4 py-3 text-right font-medium ${(h.gainLossPercent || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                   {(h.gainLossPercent || 0) >= 0 ? '+' : ''}
                   {(h.gainLossPercent || 0).toFixed(2)}%
                 </td>
-                <td className="px-4 py-3 text-right text-gray-600">
+                <td className="px-4 py-3 text-right text-slate-400">
                   {alloc.toFixed(1)}%
                 </td>
               </tr>

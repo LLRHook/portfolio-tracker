@@ -14,10 +14,10 @@ export default class ErrorBoundary extends Component {
     if (this.state.hasError) {
       return (
         <div className="flex min-h-[50vh] items-center justify-center">
-          <div className="max-w-md rounded-lg bg-white p-8 shadow text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+          <div className="glass max-w-md rounded-2xl p-8 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-rose-500/20">
               <svg
-                className="h-6 w-6 text-red-600"
+                className="h-6 w-6 text-rose-400"
                 fill="none"
                 viewBox="0 0 24 24"
                 strokeWidth={1.5}
@@ -30,17 +30,17 @@ export default class ErrorBoundary extends Component {
                 />
               </svg>
             </div>
-            <h2 className="mb-2 text-lg font-semibold text-gray-900">
+            <h2 className="mb-2 text-lg font-semibold text-white">
               Something went wrong
             </h2>
-            <p className="mb-4 text-sm text-gray-500">
+            <p className="mb-4 text-sm text-slate-400">
               {this.state.error?.message || 'An unexpected error occurred.'}
             </p>
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
               }}
-              className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+              className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-500 shadow-lg shadow-cyan-500/25"
             >
               Try again
             </button>
