@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -48,10 +48,26 @@ function CustomTooltip({ active, payload }) {
   );
 }
 
+function SinglePointView({ data }) {
+  const point = data.find(d => d.totalValue != null);
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2">
+      <p className="text-2xl font-semibold text-gray-900">
+        {formatCurrency(point?.totalValue || 0)}
+      </p>
+      <p className="text-xs text-gray-500">
+        {formatDate(point?.date || '')}
+      </p>
+      <p className="text-sm text-gray-500">
+        Import more CSVs to see trends
+      </p>
+    </div>
+  );
+}
+
 export default function PerformanceChart() {
   const [range, setRange] = useState('1M');
   const [data, setData] = useState(null);
-  const [portfolioPointCount, setPortfolioPointCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -75,7 +91,6 @@ export default function PerformanceChart() {
 
       const merged = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
       setData(merged);
-      setPortfolioPointCount(portfolio.length);
     } catch (err) {
       setError(err.message || 'Failed to load history');
     } finally {
@@ -86,6 +101,11 @@ export default function PerformanceChart() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const portfolioPointCount = useMemo(
+    () => data?.filter(d => d.totalValue != null).length ?? 0,
+    [data],
+  );
 
   return (
     <div className="rounded-lg bg-white p-6 shadow">
@@ -134,17 +154,7 @@ export default function PerformanceChart() {
             </p>
           </div>
         ) : portfolioPointCount === 1 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2">
-            <p className="text-2xl font-semibold text-gray-900">
-              {formatCurrency(data.find(d => d.totalValue != null)?.totalValue || 0)}
-            </p>
-            <p className="text-xs text-gray-500">
-              {formatDate(data.find(d => d.totalValue != null)?.date || '')}
-            </p>
-            <p className="text-sm text-gray-500">
-              Import more CSVs to see trends
-            </p>
-          </div>
+          <SinglePointView data={data} />
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>

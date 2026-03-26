@@ -86,11 +86,11 @@ export function upsertHolding(userId, holding) {
   upsertHoldingStmt.run(
     userId,
     holding.symbol,
-    holding.description || null,
+    holding.description ?? null,
     holding.quantity,
-    holding.costBasis || null,
-    holding.lastPriceChange || null,
-    holding.accountName || null,
+    holding.costBasis ?? null,
+    holding.lastPriceChange ?? null,
+    holding.accountName ?? null,
   );
 }
 
@@ -204,12 +204,12 @@ export function insertSnapshot(userId, date, holding) {
     userId,
     date,
     holding.symbol,
-    holding.description || null,
+    holding.description ?? null,
     holding.quantity,
-    holding.costBasis || null,
-    holding.currentPrice || null,
-    holding.currentValue || null,
-    holding.accountName || null,
+    holding.costBasis ?? null,
+    holding.currentPrice ?? null,
+    holding.currentValue ?? null,
+    holding.accountName ?? null,
   );
 }
 
@@ -219,9 +219,9 @@ export function insertDailyTotal(userId, date, totals) {
     date,
     totals.totalValue,
     totals.totalCost,
-    totals.dayGainLoss || null,
-    totals.holdingsCount || null,
-    totals.spyShares || 0,
+    totals.dayGainLoss ?? null,
+    totals.holdingsCount ?? null,
+    totals.spyShares ?? 0,
   );
 }
 

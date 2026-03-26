@@ -6,6 +6,7 @@ import bcrypt from 'bcrypt';
 import multer from 'multer';
 import { fetchSpyPriceOnDate, fetchSpyHistory } from './quotes.js';
 import {
+  db,
   upsertHolding, getHoldings, deleteHoldings, hasHoldings,
   createUser, findUser, getUserCount,
   insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
@@ -240,21 +241,15 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     }
 
     const userId = getUserId(req);
-    // Clear existing holdings so sold positions don't linger
-    deleteHoldings(userId);
-    for (const holding of holdings) {
-      upsertHolding(userId, holding);
-      insertSnapshot(userId, snapshotDate, holding);
-    }
 
     // Compute daily totals
     let totalValue = 0;
     let totalCost = 0;
     let totalDayChange = 0;
     for (const h of holdings) {
-      totalValue += (h.currentValue || 0);
-      totalCost += ((h.costBasis || 0) * h.quantity);
-      totalDayChange += (h.lastPriceChange || 0) * h.quantity;
+      totalValue += (h.currentValue ?? 0);
+      totalCost += ((h.costBasis ?? 0) * h.quantity);
+      totalDayChange += (h.lastPriceChange ?? 0) * h.quantity;
     }
 
     // SPY shares calculation (buy-and-hold benchmark)
@@ -275,16 +270,25 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
       }
     } catch (err) {
       console.error('SPY price fetch failed during import:', err.message);
-      spyShares = prev?.spy_shares || 0;
+      spyShares = prev?.spy_shares ?? 0;
     }
 
-    insertDailyTotal(userId, snapshotDate, {
-      totalValue,
-      totalCost,
-      dayGainLoss: totalDayChange,
-      holdingsCount: holdings.length,
-      spyShares,
+    // Wrap all DB writes in a single transaction for atomicity and performance
+    const importTransaction = db.transaction(() => {
+      deleteHoldings(userId);
+      for (const holding of holdings) {
+        upsertHolding(userId, holding);
+        insertSnapshot(userId, snapshotDate, holding);
+      }
+      insertDailyTotal(userId, snapshotDate, {
+        totalValue,
+        totalCost,
+        dayGainLoss: totalDayChange,
+        holdingsCount: holdings.length,
+        spyShares,
+      });
     });
+    importTransaction();
 
     res.json({ imported: holdings.length, snapshotDate, spyShares });
   } catch (err) {
@@ -357,20 +361,19 @@ app.delete('/api/holdings', (req, res) => {
 });
 
 // --- History endpoints ---
+const RANGE_DAYS = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
+
+function parseDateRange(range) {
+  const endDate = new Date().toISOString().split('T')[0];
+  if (range === 'all') return { startDate: '2000-01-01', endDate };
+  const d = new Date();
+  d.setDate(d.getDate() - (RANGE_DAYS[range] || 30));
+  return { startDate: d.toISOString().split('T')[0], endDate };
+}
+
 app.get('/api/history', async (req, res) => {
   const userId = getUserId(req);
-  const range = req.query.range || '1m';
-  const endDate = new Date().toISOString().split('T')[0];
-
-  const ranges = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
-  let startDate;
-  if (range === 'all') {
-    startDate = '2000-01-01';
-  } else {
-    const d = new Date();
-    d.setDate(d.getDate() - (ranges[range] || 30));
-    startDate = d.toISOString().split('T')[0];
-  }
+  const { startDate, endDate } = parseDateRange(req.query.range || '1m');
 
   const rows = getDailyTotals(userId, startDate, endDate);
 
@@ -422,18 +425,7 @@ app.get('/api/history', async (req, res) => {
 app.get('/api/history/:symbol', (req, res) => {
   const userId = getUserId(req);
   const { symbol } = req.params;
-  const range = req.query.range || '1m';
-  const endDate = new Date().toISOString().split('T')[0];
-
-  const ranges = { '1w': 7, '1m': 30, '3m': 90, '6m': 180, '1y': 365 };
-  let startDate;
-  if (range === 'all') {
-    startDate = '2000-01-01';
-  } else {
-    const d = new Date();
-    d.setDate(d.getDate() - (ranges[range] || 30));
-    startDate = d.toISOString().split('T')[0];
-  }
+  const { startDate, endDate } = parseDateRange(req.query.range || '1m');
 
   const rows = getHoldingHistory(userId, symbol, startDate, endDate);
   res.json(rows.map(r => ({
