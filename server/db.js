@@ -246,4 +246,43 @@ export function getLatestSnapshotPrices(userId) {
   return getLatestSnapshotPricesStmt.all(userId, userId);
 }
 
+// --- Backup / Restore ---
+const getAllSnapshotsStmt = db.prepare(
+  'SELECT * FROM snapshots WHERE user_id = ? ORDER BY snapshot_date, symbol'
+);
+const getAllDailyTotalsStmt = db.prepare(
+  'SELECT * FROM daily_totals WHERE user_id = ? ORDER BY snapshot_date'
+);
+
+export function getAllSnapshots(userId) {
+  return getAllSnapshotsStmt.all(userId);
+}
+
+export function getAllDailyTotals(userId) {
+  return getAllDailyTotalsStmt.all(userId);
+}
+
+export function restoreUserData(userId, holdings, snapshots, dailyTotals) {
+  const restore = db.transaction(() => {
+    deleteHoldingsStmt.run(userId);
+    db.prepare('DELETE FROM snapshots WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM daily_totals WHERE user_id = ?').run(userId);
+
+    for (const h of holdings) {
+      upsertHoldingStmt.run(userId, h.symbol, h.description ?? null, h.quantity,
+        h.cost_basis ?? null, h.last_price_change ?? null, h.account_name ?? null);
+    }
+    for (const s of snapshots) {
+      insertSnapshotStmt.run(userId, s.snapshot_date, s.symbol, s.description ?? null,
+        s.quantity, s.cost_basis ?? null, s.current_price ?? null, s.current_value ?? null,
+        s.account_name ?? null);
+    }
+    for (const d of dailyTotals) {
+      insertDailyTotalStmt.run(userId, d.snapshot_date, d.total_value, d.total_cost,
+        d.day_gain_loss ?? null, d.holdings_count ?? null, d.spy_shares ?? 0);
+    }
+  });
+  restore();
+}
+
 export { db };

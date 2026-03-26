@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { api } from '../api';
 import { useToast } from './Toast';
 import ErrorBoundary from './ErrorBoundary';
@@ -9,6 +9,8 @@ import AllocationChart from './AllocationChart';
 
 export default function Dashboard({ holdings, onLogout, onImportCsv, onClearHoldings }) {
   const [clearing, setClearing] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const restoreInputRef = useRef(null);
   const { addToast } = useToast();
 
   async function handleClearHoldings() {
@@ -27,6 +29,38 @@ export default function Dashboard({ holdings, onLogout, onImportCsv, onClearHold
     }
   }
 
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const blob = await api.exportBackup();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `portfolio-backup-${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast('Backup downloaded.', 'success');
+    } catch (err) {
+      addToast(err.message || 'Failed to export backup', 'error');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handleRestore(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!window.confirm('This will replace all your current data. Continue?')) return;
+    try {
+      const result = await api.restoreBackup(file);
+      addToast(`Restored ${result.holdings} holdings, ${result.snapshots} snapshots.`, 'success');
+      onClearHoldings?.();
+    } catch (err) {
+      addToast(err.message || 'Failed to restore backup', 'error');
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
@@ -41,6 +75,26 @@ export default function Dashboard({ holdings, onLogout, onImportCsv, onClearHold
             >
               Import CSV
             </button>
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="rounded-md bg-green-50 px-3 py-1.5 text-sm font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
+            >
+              {exporting ? 'Exporting...' : 'Export Data'}
+            </button>
+            <button
+              onClick={() => restoreInputRef.current?.click()}
+              className="rounded-md bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 transition hover:bg-amber-100"
+            >
+              Restore Data
+            </button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleRestore}
+            />
             <button
               onClick={handleClearHoldings}
               disabled={clearing}

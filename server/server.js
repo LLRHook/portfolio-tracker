@@ -11,6 +11,7 @@ import {
   createUser, findUser, getUserCount,
   insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
   getPreviousDailyTotal, getLatestSnapshotPrices,
+  getAllSnapshots, getAllDailyTotals, restoreUserData,
 } from './db.js';
 
 const app = express();
@@ -357,6 +358,60 @@ app.delete('/api/holdings', (req, res) => {
   } catch (err) {
     console.error('Error deleting holdings:', err.message);
     res.status(500).json({ error: 'Failed to delete holdings' });
+  }
+});
+
+// --- Backup / Restore ---
+app.get('/api/backup', (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const backup = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      user: userId,
+      holdings: getHoldings(userId),
+      snapshots: getAllSnapshots(userId),
+      dailyTotals: getAllDailyTotals(userId),
+    };
+    const filename = `portfolio-backup-${new Date().toISOString().split('T')[0]}.json`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.json(backup);
+  } catch (err) {
+    console.error('Backup error:', err.message);
+    res.status(500).json({ error: 'Failed to create backup' });
+  }
+});
+
+app.post('/api/restore', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    let backup;
+    try {
+      backup = JSON.parse(req.file.buffer.toString('utf-8'));
+    } catch {
+      return res.status(400).json({ error: 'Invalid JSON file' });
+    }
+
+    if (!backup.version || !Array.isArray(backup.holdings) ||
+        !Array.isArray(backup.snapshots) || !Array.isArray(backup.dailyTotals)) {
+      return res.status(400).json({ error: 'Invalid backup format' });
+    }
+    if (backup.version > 1) {
+      return res.status(400).json({ error: 'Backup version not supported. Update your app.' });
+    }
+
+    const userId = getUserId(req);
+    restoreUserData(userId, backup.holdings, backup.snapshots, backup.dailyTotals);
+    res.json({
+      restored: true,
+      holdings: backup.holdings.length,
+      snapshots: backup.snapshots.length,
+      dailyTotals: backup.dailyTotals.length,
+    });
+  } catch (err) {
+    console.error('Restore error:', err.message);
+    res.status(500).json({ error: 'Failed to restore backup' });
   }
 });
 

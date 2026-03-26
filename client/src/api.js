@@ -56,6 +56,35 @@ export const api = {
   // Delete all holdings
   deleteHoldings: () => request('/holdings', { method: 'DELETE' }),
 
+  // Backup / Restore
+  exportBackup: async () => {
+    const res = await fetch(`${BASE_URL}/backup`, { credentials: 'include' });
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) throw new Error('Failed to export backup');
+    return res.blob();
+  },
+  restoreBackup: async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(`${BASE_URL}/restore`, {
+      method: 'POST',
+      credentials: 'include',
+      body: formData,
+    });
+    if (res.status === 401) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to restore backup');
+    }
+    return res.json();
+  },
+
   // History
   getHistory: (range = '1m') => request(`/history?range=${range}`),
   getSymbolHistory: (symbol, range = '1m') => request(`/history/${encodeURIComponent(symbol)}?range=${range}`),
