@@ -6,8 +6,9 @@ import StatCards from './StatCards';
 import HoldingsTable from './HoldingsTable';
 import PerformanceChart from './PerformanceChart';
 import AllocationChart from './AllocationChart';
+import ClosedPositions from './ClosedPositions';
 
-export default function Dashboard({ holdings, onImportCsv, onClearHoldings }) {
+export default function Dashboard({ holdings, closedPositions, onImportCsv, onClearHoldings }) {
   const [clearing, setClearing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const restoreInputRef = useRef(null);
@@ -111,6 +112,10 @@ export default function Dashboard({ holdings, onImportCsv, onClearHoldings }) {
 
         <ErrorBoundary>
           <HoldingsTable holdings={holdings} />
+        </ErrorBoundary>
+
+        <ErrorBoundary>
+          <ClosedPositions positions={closedPositions} />
         </ErrorBoundary>
       </main>
     </div>

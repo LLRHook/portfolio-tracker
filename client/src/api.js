@@ -56,6 +56,9 @@ export const api = {
   // Delete all holdings
   deleteHoldings: () => request('/holdings', { method: 'DELETE' }),
 
+  // Closed positions
+  getClosedPositions: () => request('/closed-positions'),
+
   // Backup / Restore
   exportBackup: async () => {
     const res = await fetch(`${BASE_URL}/backup`, { credentials: 'include' });

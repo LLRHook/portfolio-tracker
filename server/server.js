@@ -12,6 +12,7 @@ import {
   insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
   getPreviousDailyTotal, getLatestSnapshotPrices,
   getAllSnapshots, getAllDailyTotals, restoreUserData,
+  insertClosedPosition, getClosedPositions, deleteClosedPositions,
 } from './db.js';
 
 const app = express();
@@ -277,8 +278,33 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
       spyShares = prev?.spy_shares ?? 0;
     }
 
+    // Detect sold positions before clearing holdings
+    const previousHoldings = getHoldings(userId);
+    const newSymbols = new Set(holdings.map(h => `${h.symbol}:${h.accountName ?? ''}`));
+    const sold = previousHoldings.filter(h => !newSymbols.has(`${h.symbol}:${h.account_name ?? ''}`));
+
+    // Get last known prices for sold positions from snapshots
+    const snapshotPrices = getLatestSnapshotPrices(userId);
+    const priceMap = new Map();
+    for (const sp of snapshotPrices) {
+      priceMap.set(`${sp.symbol}:${sp.account_name ?? ''}`, sp.current_price);
+    }
+
     // Wrap all DB writes in a single transaction for atomicity and performance
     const importTransaction = db.transaction(() => {
+      // Log closed positions
+      for (const s of sold) {
+        insertClosedPosition(userId, {
+          symbol: s.symbol,
+          description: s.description,
+          quantity: s.quantity,
+          cost_basis: s.cost_basis,
+          last_price: priceMap.get(`${s.symbol}:${s.account_name ?? ''}`) ?? s.cost_basis,
+          close_date: snapshotDate,
+          account_name: s.account_name,
+        });
+      }
+
       deleteHoldings(userId);
       for (const holding of holdings) {
         upsertHolding(userId, holding);
@@ -357,10 +383,31 @@ app.delete('/api/holdings', (req, res) => {
   try {
     const userId = getUserId(req);
     deleteHoldings(userId);
+    deleteClosedPositions(userId);
     res.json({ success: true });
   } catch (err) {
     console.error('Error deleting holdings:', err.message);
     res.status(500).json({ error: 'Failed to delete holdings' });
+  }
+});
+
+// --- Closed Positions ---
+app.get('/api/closed-positions', (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const positions = getClosedPositions(userId);
+    res.json(positions.map(p => ({
+      symbol: p.symbol,
+      description: p.description,
+      quantity: p.quantity,
+      costBasis: p.cost_basis,
+      lastPrice: p.last_price,
+      closeDate: p.close_date,
+      accountName: p.account_name,
+    })));
+  } catch (err) {
+    console.error('Error fetching closed positions:', err.message);
+    res.status(500).json({ error: 'Failed to fetch closed positions' });
   }
 });
 
@@ -375,6 +422,7 @@ app.get('/api/backup', (req, res) => {
       holdings: getHoldings(userId),
       snapshots: getAllSnapshots(userId),
       dailyTotals: getAllDailyTotals(userId),
+      closedPositions: getClosedPositions(userId),
     };
     const filename = `portfolio-backup-${new Date().toISOString().split('T')[0]}.json`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -405,7 +453,7 @@ app.post('/api/restore', upload.single('file'), (req, res) => {
     }
 
     const userId = getUserId(req);
-    restoreUserData(userId, backup.holdings, backup.snapshots, backup.dailyTotals);
+    restoreUserData(userId, backup.holdings, backup.snapshots, backup.dailyTotals, backup.closedPositions);
     res.json({
       restored: true,
       holdings: backup.holdings.length,

@@ -153,6 +153,21 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS closed_positions (
+    id INTEGER PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    description TEXT,
+    quantity REAL NOT NULL,
+    cost_basis REAL,
+    last_price REAL,
+    close_date TEXT NOT NULL,
+    account_name TEXT,
+    UNIQUE(user_id, symbol, close_date, account_name)
+  )
+`);
+
 // --- Snapshot CRUD ---
 const insertSnapshotStmt = db.prepare(`
   INSERT INTO snapshots (user_id, snapshot_date, symbol, description, quantity, cost_basis, current_price, current_value, account_name)
@@ -262,11 +277,19 @@ export function getAllDailyTotals(userId) {
   return getAllDailyTotalsStmt.all(userId);
 }
 
-export function restoreUserData(userId, holdings, snapshots, dailyTotals) {
+export function restoreUserData(userId, holdings, snapshots, dailyTotals, closedPositions) {
   const restore = db.transaction(() => {
     deleteHoldingsStmt.run(userId);
     db.prepare('DELETE FROM snapshots WHERE user_id = ?').run(userId);
     db.prepare('DELETE FROM daily_totals WHERE user_id = ?').run(userId);
+    deleteClosedPositionsStmt.run(userId);
+
+    if (closedPositions) {
+      for (const cp of closedPositions) {
+        insertClosedPositionStmt.run(userId, cp.symbol, cp.description ?? null, cp.quantity,
+          cp.cost_basis ?? null, cp.last_price ?? null, cp.close_date, cp.account_name ?? null);
+      }
+    }
 
     for (const h of holdings) {
       upsertHoldingStmt.run(userId, h.symbol, h.description ?? null, h.quantity,
@@ -283,6 +306,41 @@ export function restoreUserData(userId, holdings, snapshots, dailyTotals) {
     }
   });
   restore();
+}
+
+// --- Closed Positions ---
+const insertClosedPositionStmt = db.prepare(`
+  INSERT INTO closed_positions (user_id, symbol, description, quantity, cost_basis, last_price, close_date, account_name)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(user_id, symbol, close_date, account_name) DO UPDATE SET
+    description = excluded.description,
+    quantity = excluded.quantity,
+    cost_basis = excluded.cost_basis,
+    last_price = excluded.last_price
+`);
+
+const getClosedPositionsStmt = db.prepare(
+  'SELECT * FROM closed_positions WHERE user_id = ? ORDER BY close_date DESC, symbol'
+);
+
+const deleteClosedPositionsStmt = db.prepare(
+  'DELETE FROM closed_positions WHERE user_id = ?'
+);
+
+export function insertClosedPosition(userId, pos) {
+  insertClosedPositionStmt.run(
+    userId, pos.symbol, pos.description ?? null, pos.quantity,
+    pos.cost_basis ?? null, pos.last_price ?? null, pos.close_date,
+    pos.account_name ?? null,
+  );
+}
+
+export function getClosedPositions(userId) {
+  return getClosedPositionsStmt.all(userId);
+}
+
+export function deleteClosedPositions(userId) {
+  deleteClosedPositionsStmt.run(userId);
 }
 
 export { db };

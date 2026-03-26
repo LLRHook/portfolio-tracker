@@ -5,24 +5,27 @@ import CsvUpload from './components/CsvUpload';
 
 function App() {
   const [holdings, setHoldings] = useState(null);
+  const [closedPositions, setClosedPositions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
 
-  const fetchHoldings = useCallback(() => {
+  const fetchData = useCallback(() => {
     setLoading(true);
-    api
-      .getHoldings()
-      .then((data) => {
+    Promise.all([
+      api.getHoldings().then(data => {
         const list = data.holdings || data;
-        setHoldings(Array.isArray(list) ? list : []);
-      })
-      .catch(() => setHoldings([]))
-      .finally(() => setLoading(false));
+        return Array.isArray(list) ? list : [];
+      }).catch(() => []),
+      api.getClosedPositions().catch(() => []),
+    ]).then(([h, cp]) => {
+      setHoldings(h);
+      setClosedPositions(cp);
+    }).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    fetchHoldings();
-  }, [fetchHoldings]);
+    fetchData();
+  }, [fetchData]);
 
   if (loading) {
     return (
@@ -38,7 +41,7 @@ function App() {
         <CsvUpload
           onSuccess={() => {
             setShowUpload(false);
-            fetchHoldings();
+            fetchData();
           }}
         />
       </div>
@@ -48,8 +51,9 @@ function App() {
   return (
     <Dashboard
       holdings={holdings}
+      closedPositions={closedPositions}
       onImportCsv={() => setShowUpload(true)}
-      onClearHoldings={() => setHoldings([])}
+      onClearHoldings={() => { setHoldings([]); setClosedPositions([]); }}
     />
   );
 }
