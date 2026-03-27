@@ -1,13 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ResponsiveContainer,
-  LineChart,
+  ComposedChart,
+  Bar,
   Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
+  Cell,
 } from 'recharts';
 import { api } from '../api';
 
@@ -33,39 +36,31 @@ function CustomTooltip({ active, payload }) {
   return (
     <div className="glass rounded-lg px-3 py-2 text-sm shadow-xl">
       <p className="font-medium text-white">{formatDate(d.date)}</p>
-      {d.totalValue != null && (
-        <p className="text-cyan-400">Portfolio: {formatCurrency(d.totalValue)}</p>
+      {d.dailyAlpha != null && (
+        <p className={d.dailyAlpha >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+          Daily: {d.dailyAlpha >= 0 ? '+' : ''}{formatCurrency(d.dailyAlpha)}
+        </p>
       )}
-      {d.spValue != null && (
-        <p className="text-orange-400">S&P 500: {formatCurrency(d.spValue)}</p>
+      {d.cumulativeAlpha != null && (
+        <p className="text-violet-400">
+          Cumulative: {d.cumulativeAlpha >= 0 ? '+' : ''}{formatCurrency(d.cumulativeAlpha)}
+        </p>
       )}
-      {d.dayGainLoss != null && (
-        <p className={d.dayGainLoss >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-          {d.dayGainLoss >= 0 ? '+' : ''}{formatCurrency(d.dayGainLoss)}
+      {d.portfolioChange != null && (
+        <p className="text-cyan-400/70 text-xs">
+          Portfolio: {d.portfolioChange >= 0 ? '+' : ''}{formatCurrency(d.portfolioChange)}
+        </p>
+      )}
+      {d.spChange != null && (
+        <p className="text-orange-400/70 text-xs">
+          S&P 500: {d.spChange >= 0 ? '+' : ''}{formatCurrency(d.spChange)}
         </p>
       )}
     </div>
   );
 }
 
-function SinglePointView({ data }) {
-  const point = data.find(d => d.totalValue != null);
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2">
-      <p className="text-2xl font-semibold text-white">
-        {formatCurrency(point?.totalValue || 0)}
-      </p>
-      <p className="text-xs text-slate-400">
-        {formatDate(point?.date || '')}
-      </p>
-      <p className="text-sm text-slate-500">
-        Import more CSVs to see trends
-      </p>
-    </div>
-  );
-}
-
-export default function PerformanceChart({ compact }) {
+export default function AlphaChart({ compact }) {
   const [range, setRange] = useState('1M');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -78,18 +73,36 @@ export default function PerformanceChart({ compact }) {
       const result = await api.getHistory(range.toLowerCase());
       const { portfolio = [], benchmark = [] } = result;
 
-      const map = new Map();
-      for (const p of portfolio) {
-        map.set(p.date, { date: p.date, totalValue: p.totalValue, dayGainLoss: p.dayGainLoss });
-      }
+      const spMap = new Map();
       for (const b of benchmark) {
-        const existing = map.get(b.date) || { date: b.date };
-        existing.spValue = b.spValue;
-        map.set(b.date, existing);
+        spMap.set(b.date, b.spValue);
       }
 
-      const merged = Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
-      setData(merged);
+      const alphaData = [];
+      let cumAlpha = 0;
+
+      for (let i = 1; i < portfolio.length; i++) {
+        const prev = portfolio[i - 1];
+        const curr = portfolio[i];
+        const portfolioChange = curr.totalValue - prev.totalValue;
+
+        const spPrev = spMap.get(prev.date);
+        const spCurr = spMap.get(curr.date);
+        const spChange = spPrev != null && spCurr != null ? spCurr - spPrev : 0;
+
+        const dailyAlpha = portfolioChange - spChange;
+        cumAlpha += dailyAlpha;
+
+        alphaData.push({
+          date: curr.date,
+          dailyAlpha,
+          cumulativeAlpha: cumAlpha,
+          portfolioChange,
+          spChange,
+        });
+      }
+
+      setData(alphaData);
     } catch (err) {
       setError(err.message || 'Failed to load history');
     } finally {
@@ -101,16 +114,13 @@ export default function PerformanceChart({ compact }) {
     fetchData();
   }, [fetchData]);
 
-  const portfolioPointCount = useMemo(
-    () => data?.filter(d => d.totalValue != null).length ?? 0,
-    [data],
-  );
+  const hasData = useMemo(() => data && data.length > 0, [data]);
 
   return (
     <div className={`glass ${compact ? 'rounded-xl p-3' : 'rounded-2xl p-6'}`}>
       <div className={`${compact ? 'mb-2' : 'mb-4'} flex items-center justify-between`}>
         <h2 className={`${compact ? 'text-sm' : 'text-lg'} font-semibold text-white`}>
-          Portfolio Performance
+          Daily Alpha vs S&P 500
         </h2>
         <div className="flex gap-0.5">
           {RANGES.map((r) => (
@@ -119,7 +129,7 @@ export default function PerformanceChart({ compact }) {
               onClick={() => setRange(r)}
               className={`rounded px-2 py-0.5 text-[10px] font-medium transition ${
                 range === r
-                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                  ? 'bg-violet-500/20 text-violet-400 border border-violet-500/30'
                   : 'text-slate-400 hover:text-white hover:bg-white/5'
               }`}
             >
@@ -141,22 +151,20 @@ export default function PerformanceChart({ compact }) {
             <p className="text-sm text-rose-400">Failed to load history</p>
             <button
               onClick={fetchData}
-              className="rounded-lg bg-cyan-500/10 border border-cyan-500/30 px-3 py-1.5 text-sm font-medium text-cyan-400 transition hover:bg-cyan-500/20"
+              className="rounded-lg bg-violet-500/10 border border-violet-500/30 px-3 py-1.5 text-sm font-medium text-violet-400 transition hover:bg-violet-500/20"
             >
               Retry
             </button>
           </div>
-        ) : portfolioPointCount === 0 ? (
+        ) : !hasData ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-center text-sm text-slate-500">
-              No historical data yet. Import a CSV to start tracking.
+              Need at least 2 days of data to compute alpha.
             </p>
           </div>
-        ) : portfolioPointCount === 1 ? (
-          <SinglePointView data={data} />
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data}>
+            <ComposedChart data={data}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="date"
@@ -171,34 +179,32 @@ export default function PerformanceChart({ compact }) {
                 axisLine={false}
                 tickLine={false}
                 width={80}
-                domain={['dataMin - 500', 'dataMax + 500']}
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
                 wrapperStyle={{ paddingTop: '8px' }}
                 formatter={(value) => <span className="text-slate-300 text-xs">{value}</span>}
               />
+              <ReferenceLine y={0} stroke="rgba(255,255,255,0.2)" />
+              <Bar dataKey="dailyAlpha" name="Daily Alpha" radius={[3, 3, 0, 0]}>
+                {data.map((entry, i) => (
+                  <Cell
+                    key={i}
+                    fill={entry.dailyAlpha >= 0 ? '#34d399' : '#fb7185'}
+                    fillOpacity={0.7}
+                  />
+                ))}
+              </Bar>
               <Line
                 type="monotone"
-                dataKey="totalValue"
-                name="Portfolio"
-                stroke="#22d3ee"
+                dataKey="cumulativeAlpha"
+                name="Cumulative Alpha"
+                stroke="#a78bfa"
                 strokeWidth={2}
                 dot={false}
-                activeDot={{ r: 4, fill: '#22d3ee' }}
-                connectNulls
+                activeDot={{ r: 4, fill: '#a78bfa' }}
               />
-              <Line
-                type="monotone"
-                dataKey="spValue"
-                name="S&P 500"
-                stroke="#f97316"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: '#f97316' }}
-                connectNulls
-              />
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>

@@ -40,7 +40,7 @@ function arcPath(cx, cy, innerR, outerR, startAngle, endAngle) {
   ].join(' ');
 }
 
-export default function AllocationChart({ holdings }) {
+export default function AllocationChart({ holdings, compact }) {
   const [hovered, setHovered] = useState(null);
 
   const totalValue = useMemo(
@@ -69,9 +69,9 @@ export default function AllocationChart({ holdings }) {
 
   if (!holdings || holdings.length === 0) {
     return (
-      <div className="glass rounded-2xl p-6">
-        <h2 className="text-lg font-semibold text-white">Asset Allocation</h2>
-        <div className="flex h-80 items-center justify-center">
+      <div className={`glass ${compact ? 'rounded-xl p-3' : 'rounded-2xl p-6'}`}>
+        <h2 className={`${compact ? 'text-sm' : 'text-lg'} font-semibold text-white`}>Asset Allocation</h2>
+        <div className="flex h-52 items-center justify-center">
           <p className="text-sm text-slate-500">No holdings to display.</p>
         </div>
       </div>
@@ -124,10 +124,10 @@ export default function AllocationChart({ holdings }) {
   }, [segments]);
 
   return (
-    <div className="glass rounded-2xl p-6">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">Asset Allocation</h2>
-        <span className="text-sm text-slate-400">{formatCurrency(totalValue)}</span>
+    <div className={`glass ${compact ? 'rounded-xl p-3' : 'rounded-2xl p-6'}`}>
+      <div className={`${compact ? 'mb-1' : 'mb-3'} flex items-center justify-between`}>
+        <h2 className={`${compact ? 'text-sm' : 'text-lg'} font-semibold text-white`}>Asset Allocation</h2>
+        <span className={`${compact ? 'text-xs' : 'text-sm'} text-slate-400`}>{formatCurrency(totalValue)}</span>
       </div>
 
       <div className="flex justify-center">
