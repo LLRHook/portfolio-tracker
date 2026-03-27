@@ -250,16 +250,17 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     // Compute daily totals
     let totalValue = 0;
     let totalCost = 0;
-    let totalDayChange = 0;
     for (const h of holdings) {
       totalValue += (h.currentValue ?? 0);
       totalCost += ((h.costBasis ?? 0) * h.quantity);
-      totalDayChange += (h.lastPriceChange ?? 0) * h.quantity;
     }
+
+    // Daily change = simple diff of total portfolio value vs previous day
+    const prev = getPreviousDailyTotal(userId, snapshotDate);
+    const totalDayChange = prev ? totalValue - prev.total_value : 0;
 
     // SPY shares calculation (buy-and-hold benchmark)
     let spyShares = 0;
-    const prev = getPreviousDailyTotal(userId, snapshotDate);
     try {
       const spyPrice = await fetchSpyPriceOnDate(snapshotDate);
       if (!prev || !prev.spy_shares) {
@@ -283,31 +284,17 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     const newSymbols = new Set(holdings.map(h => `${h.symbol}:${h.accountName ?? ''}`));
     const sold = previousHoldings.filter(h => !newSymbols.has(`${h.symbol}:${h.account_name ?? ''}`));
 
-    // Estimate sale price for sold positions using portfolio arithmetic:
-    // sale_proceeds = prev_position_value + (V_today - V_prev - dayChange_today)
-    // Assumes one position sold at a time.
+    // Estimate sale price for sold positions using last known snapshot price
     const snapshotPrices = getLatestSnapshotPrices(userId);
     const priceMap = new Map();
     for (const sp of snapshotPrices) {
       priceMap.set(`${sp.symbol}:${sp.account_name ?? ''}`, sp);
     }
 
-    let soldEstimates = [];
-    if (sold.length === 1 && prev) {
-      const s = sold[0];
+    const soldEstimates = sold.map(s => {
       const sp = priceMap.get(`${s.symbol}:${s.account_name ?? ''}`);
-      const prevPositionValue = sp?.current_value ?? (s.cost_basis ?? 0) * s.quantity;
-      const saleImpact = (totalValue - prev.total_value) - totalDayChange;
-      const saleProceeds = prevPositionValue + saleImpact;
-      const salePrice = s.quantity > 0 ? saleProceeds / s.quantity : s.cost_basis;
-      soldEstimates.push({ ...s, estimatedSalePrice: salePrice });
-    } else {
-      // Multiple sales or no previous data — fall back to last snapshot price
-      soldEstimates = sold.map(s => {
-        const sp = priceMap.get(`${s.symbol}:${s.account_name ?? ''}`);
-        return { ...s, estimatedSalePrice: sp?.current_price ?? s.cost_basis };
-      });
-    }
+      return { ...s, estimatedSalePrice: sp?.current_price ?? s.cost_basis };
+    });
 
     // Wrap all DB writes in a single transaction for atomicity and performance
     const importTransaction = db.transaction(() => {
