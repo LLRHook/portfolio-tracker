@@ -10,15 +10,18 @@ function formatPercent(value) {
   return `${sign}${value.toFixed(2)}%`;
 }
 
-export default function StatCards({ holdings }) {
+export default function StatCards({ holdings, summary }) {
   if (!holdings || holdings.length === 0) return null;
 
   const totalValue = holdings.reduce((s, h) => s + (h.currentValue || 0), 0);
-  const totalDayChange = holdings.reduce((s, h) => s + (h.dayChange || 0) * (h.quantity || 0), 0);
   const totalCostBasis = holdings.reduce((s, h) => s + (h.costBasis || 0) * (h.quantity || 0), 0);
   const totalGainLoss = holdings.reduce((s, h) => s + (h.gainLoss || 0), 0);
 
-  const dayChangePercent = totalValue > 0 ? (totalDayChange / (totalValue - totalDayChange)) * 100 : 0;
+  const totalDayChange = summary?.dayChange ?? 0;
+  const dayChangePercent = summary?.dayChangePercent ?? 0;
+  const spDayChange = summary?.spDayChange;
+  const spDayChangePercent = summary?.spDayChangePercent;
+
   const gainLossPercent = totalCostBasis > 0 ? (totalGainLoss / totalCostBasis) * 100 : 0;
 
   const cards = [
@@ -36,7 +39,9 @@ export default function StatCards({ holdings }) {
     {
       label: 'Day Change',
       value: `${formatCurrency(totalDayChange)} (${formatPercent(dayChangePercent)})`,
+      subValue: spDayChange != null ? `S&P 500: ${formatCurrency(spDayChange)} (${formatPercent(spDayChangePercent)})` : null,
       color: totalDayChange >= 0 ? 'text-emerald-400' : 'text-rose-400',
+      subColor: spDayChange != null ? (spDayChange >= 0 ? 'text-emerald-400/70' : 'text-rose-400/70') : null,
       icon: (
         <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d={totalDayChange >= 0 ? "M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941" : "M2.25 6 9 12.75l4.286-4.286a11.948 11.948 0 0 1 4.306 6.43l.776 2.898m0 0 3.182-5.511m-3.182 5.51-5.511-3.181"} />
@@ -73,6 +78,11 @@ export default function StatCards({ holdings }) {
           <p className={`text-2xl font-semibold ${card.color}`}>
             {card.value}
           </p>
+          {card.subValue && (
+            <p className={`mt-1 text-sm ${card.subColor}`}>
+              {card.subValue}
+            </p>
+          )}
         </div>
       ))}
     </div>

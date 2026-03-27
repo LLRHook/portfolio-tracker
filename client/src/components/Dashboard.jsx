@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { api } from '../api';
 import { useToast } from './Toast';
 import ErrorBoundary from './ErrorBoundary';
@@ -11,8 +11,27 @@ import ClosedPositions from './ClosedPositions';
 export default function Dashboard({ holdings, closedPositions, onImportCsv, onClearHoldings }) {
   const [clearing, setClearing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [summary, setSummary] = useState(null);
   const restoreInputRef = useRef(null);
   const { addToast } = useToast();
+
+  useEffect(() => {
+    api.getHistory('1w').then(({ portfolio, benchmark }) => {
+      if (portfolio.length >= 2) {
+        const today = portfolio[portfolio.length - 1];
+        const yesterday = portfolio[portfolio.length - 2];
+        const dayChange = today.totalValue - yesterday.totalValue;
+        const dayChangePercent = yesterday.totalValue ? (dayChange / yesterday.totalValue) * 100 : 0;
+
+        const spToday = benchmark.find(b => b.date === today.date);
+        const spYesterday = benchmark.find(b => b.date === yesterday.date);
+        const spDayChange = spToday && spYesterday ? spToday.spValue - spYesterday.spValue : null;
+        const spDayChangePercent = spYesterday?.spValue ? (spDayChange / spYesterday.spValue) * 100 : null;
+
+        setSummary({ dayChange, dayChangePercent, spDayChange, spDayChangePercent });
+      }
+    }).catch(() => {});
+  }, [holdings]);
 
   async function handleClearHoldings() {
     if (!window.confirm('Are you sure you want to delete all holdings? This cannot be undone.')) return;
@@ -98,7 +117,7 @@ export default function Dashboard({ holdings, closedPositions, onImportCsv, onCl
 
       <main className="mx-auto max-w-7xl space-y-6 px-6 py-8">
         <ErrorBoundary>
-          <StatCards holdings={holdings} />
+          <StatCards holdings={holdings} summary={summary} />
         </ErrorBoundary>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

@@ -171,6 +171,7 @@ export default function PerformanceChart() {
                 axisLine={false}
                 tickLine={false}
                 width={80}
+                domain={['dataMin - 500', 'dataMax + 500']}
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
