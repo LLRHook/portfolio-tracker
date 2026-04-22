@@ -6,3 +6,7 @@ dist/
 *.db-shm
 *.db-wal
 server/data/
+
+# Claude Code local context
+CLAUDE.md
+.claude/
