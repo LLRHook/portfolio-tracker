@@ -84,6 +84,25 @@ Account Number,Account Name,Symbol,Description,Quantity,Last Price,...,Cost Basi
 
 Money market positions (e.g., SPAXX), dollar signs, percentage symbols, and disclaimer rows are all handled automatically.
 
+Imports require Account Number, Symbol, Quantity, and Current Value columns.
+Malformed numeric fields, duplicate positions, and invalid snapshot dates return
+a validation error before existing portfolio data is replaced. Optional prices
+and cost basis may be blank or `--`; an unreported equity cost basis stays unknown.
+Quoted fields support commas, escaped quotes, and embedded newlines on the server.
+
+### Regression tests
+
+```bash
+npm --prefix server ci
+npm --prefix server test
+npm --prefix client ci
+npm --prefix client run build
+```
+
+The tests use synthetic CSV records, temporary or in-memory SQLite databases,
+and mocked benchmark responses. They do not load local `.env` files, read account
+data, or contact market data services. CI runs the server tests on Node 22.
+
 ## Project Structure
 
 ```
@@ -95,8 +114,10 @@ portfolio-tracker/
 │   │   └── api.js          # API client
 │   └── Dockerfile
 ├── server/                 # Express backend
-│   ├── server.js           # API routes, CSV parser, Yahoo Finance integration
+│   ├── server.js           # API routes and Yahoo Finance integration
+│   ├── fidelity-csv.js     # CSV parsing and import validation
 │   ├── db.js               # SQLite schema, encryption helpers, CRUD
+│   ├── test/               # Fixture-only parser, database, and HTTP regressions
 │   └── Dockerfile
 ├── docker-compose.yml
 └── .env.example
@@ -110,6 +131,7 @@ portfolio-tracker/
 | `SERVER_PORT` | Backend port | `34892` |
 | `ENCRYPTION_KEY` | 32-byte hex key for AES-256-GCM | *required* |
 | `SESSION_SECRET` | Express session secret | `dev-secret-change-me` |
+| `DATABASE_PATH` | Optional SQLite file path (`:memory:` for isolated tests) | `server/portfolio.db`, or `/app/data/portfolio.db` in production |
 
 ## License
 

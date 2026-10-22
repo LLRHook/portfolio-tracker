@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.NODE_ENV === 'production' ? '/app/data' : __dirname;
-const db = new Database(path.join(dataDir, 'portfolio.db'));
+const db = new Database(process.env.DATABASE_PATH || path.join(dataDir, 'portfolio.db'));
 
 db.pragma('journal_mode = WAL');
 
@@ -37,9 +37,6 @@ db.exec(`
 // --- Migrations ---
 try {
   db.exec('ALTER TABLE holdings ADD COLUMN last_price_change REAL');
-} catch (_) { /* column already exists */ }
-try {
-  db.exec('ALTER TABLE daily_totals ADD COLUMN spy_shares REAL DEFAULT 0');
 } catch (_) { /* column already exists */ }
 
 // --- Encryption helpers ---
@@ -149,9 +146,15 @@ db.exec(`
     total_cost REAL NOT NULL,
     day_gain_loss REAL,
     holdings_count INTEGER,
+    spy_shares REAL DEFAULT 0,
     UNIQUE(user_id, snapshot_date)
   )
 `);
+
+// Create the table before migrating existing databases and preparing statements.
+if (!db.pragma('table_info(daily_totals)').some(column => column.name === 'spy_shares')) {
+  db.exec('ALTER TABLE daily_totals ADD COLUMN spy_shares REAL DEFAULT 0');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS closed_positions (

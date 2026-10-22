@@ -4,6 +4,9 @@ import cors from 'cors';
 import session from 'express-session';
 import bcrypt from 'bcrypt';
 import multer from 'multer';
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { CsvImportError, parseFidelityCsv } from './fidelity-csv.js';
 import { fetchSpyPriceOnDate, fetchSpyHistory } from './quotes.js';
 import {
   db,
@@ -42,7 +45,6 @@ async function seedDefaultUser() {
     console.log('Default user created: admin / admin');
   }
 }
-seedDefaultUser();
 
 // --- Auth middleware (auto-login for localhost) ---
 function requireAuth(req, res, next) {
@@ -102,136 +104,6 @@ app.get('/api/status', (req, res) => {
 });
 
 // --- CSV Import ---
-function stripMoney(str) {
-  if (!str) return '';
-  return str.replace(/[$,%+"]/g, '').trim();
-}
-
-function parseCsvLine(line) {
-  const fields = [];
-  let current = '';
-  let inQuotes = false;
-  for (const ch of line) {
-    if (ch === '"') {
-      inQuotes = !inQuotes;
-    } else if (ch === ',' && !inQuotes) {
-      fields.push(current.trim());
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  fields.push(current.trim());
-  return fields;
-}
-
-function parseFidelityCsv(csvText) {
-  const lines = csvText.split(/\r?\n/);
-  if (lines.length < 2) return [];
-
-  const headerLine = lines[0];
-  const headers = headerLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-
-  const colIndex = (name) => headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
-  const colIncludes = (name) => headers.findIndex(h => h.toLowerCase().includes(name.toLowerCase()));
-
-  const acctNumIdx = colIndex('Account Number');
-  const acctNameIdx = colIndex('Account Name');
-  const symbolIdx = colIndex('Symbol');
-  const descIdx = colIndex('Description');
-  const qtyIdx = colIndex('Quantity');
-  const currentValueIdx = colIncludes('Current Value');
-  const lastPriceIdx = colIndex('Last Price');
-  const lastPriceChangeIdx = colIndex('Last Price Change');
-  const avgCostIdx = colIndex('Average Cost Basis');
-
-  if (symbolIdx === -1) return { holdings: [], snapshotDate: new Date().toISOString().split('T')[0] };
-
-  const holdings = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const fields = parseCsvLine(line);
-
-    // Skip rows without a valid Account Number (disclaimers, footers)
-    const acctNum = acctNumIdx >= 0 ? (fields[acctNumIdx] || '').trim() : '';
-    if (!acctNum || !/^\d+$/.test(acctNum)) continue;
-
-    let symbol = (fields[symbolIdx] || '').replace(/^"|"$/g, '').trim();
-    if (!symbol || symbol.startsWith('**') || symbol.toLowerCase() === 'symbol') continue;
-
-    // Strip trailing asterisks (e.g. SPAXX**)
-    symbol = symbol.replace(/\*+$/, '');
-
-    const qtyStr = stripMoney(fields[qtyIdx] || '');
-    let quantity = parseFloat(qtyStr);
-
-    const currentValueStr = stripMoney(fields[currentValueIdx] || '');
-    const currentValue = parseFloat(currentValueStr);
-
-    // Money market positions (no quantity/price) — store as quantity=1, costBasis=currentValue
-    if (isNaN(quantity) || quantity === 0) {
-      if (!isNaN(currentValue) && currentValue > 0) {
-        quantity = 1;
-      } else {
-        continue;
-      }
-    }
-
-    const avgCostStr = avgCostIdx >= 0 ? stripMoney(fields[avgCostIdx] || '') : '';
-    let costBasis = avgCostStr ? parseFloat(avgCostStr) : null;
-    if (isNaN(costBasis)) costBasis = null;
-
-    // For money market (quantity forced to 1), use currentValue as cost basis
-    if (quantity === 1 && costBasis == null && !isNaN(currentValue)) {
-      costBasis = currentValue;
-    }
-
-    const lastPriceStr = lastPriceIdx >= 0 ? stripMoney(fields[lastPriceIdx] || '') : '';
-    let currentPrice = lastPriceStr ? parseFloat(lastPriceStr) : null;
-    if (isNaN(currentPrice)) currentPrice = null;
-
-    const lastPriceChangeStr = lastPriceChangeIdx >= 0 ? stripMoney(fields[lastPriceChangeIdx] || '') : '';
-    let lastPriceChange = lastPriceChangeStr ? parseFloat(lastPriceChangeStr) : 0;
-    if (isNaN(lastPriceChange)) lastPriceChange = 0;
-
-    // For money market positions (quantity=1), set currentPrice = currentValue
-    if (quantity === 1 && currentPrice == null && !isNaN(currentValue)) {
-      currentPrice = currentValue;
-    }
-
-    holdings.push({
-      symbol,
-      description: descIdx >= 0 ? (fields[descIdx] || '').replace(/^"|"$/g, '').trim() : null,
-      quantity,
-      costBasis,
-      currentPrice,
-      lastPriceChange,
-      currentValue: !isNaN(currentValue) ? currentValue : null,
-      accountName: acctNameIdx >= 0 ? (fields[acctNameIdx] || '').replace(/^"|"$/g, '').trim() : null,
-    });
-  }
-
-  // Extract snapshot date from CSV footer (e.g. "Date downloaded Mar-24-2026")
-  let snapshotDate = new Date().toISOString().split('T')[0];
-  const months = { Jan:'01', Feb:'02', Mar:'03', Apr:'04', May:'05', Jun:'06',
-                   Jul:'07', Aug:'08', Sep:'09', Oct:'10', Nov:'11', Dec:'12' };
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const match = lines[i].match(/Date downloaded\s+(\w{3})-(\d{2})-(\d{4})/i);
-    if (match) {
-      const [, mon, day, year] = match;
-      const mm = months[mon.charAt(0).toUpperCase() + mon.slice(1).toLowerCase()];
-      if (mm) {
-        snapshotDate = `${year}-${mm}-${day}`;
-      }
-      break;
-    }
-  }
-
-  return { holdings, snapshotDate };
-}
-
 app.post('/api/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -253,6 +125,9 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     for (const h of holdings) {
       totalValue += (h.currentValue ?? 0);
       totalCost += ((h.costBasis ?? 0) * h.quantity);
+    }
+    if (!Number.isFinite(totalValue) || !Number.isFinite(totalCost)) {
+      throw new CsvImportError('CSV portfolio totals exceed the supported numeric range');
     }
 
     // Daily change = simple diff of total portfolio value vs previous day
@@ -328,6 +203,9 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
 
     res.json({ imported: holdings.length, snapshotDate, spyShares });
   } catch (err) {
+    if (err instanceof CsvImportError) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('Import error:', err.message);
     res.status(500).json({ error: 'Failed to import CSV' });
   }
@@ -352,8 +230,8 @@ app.get('/api/holdings', (req, res) => {
 
     const result = rows.map(row => {
       const sp = priceMap.get(`${row.symbol}:${row.account_name || ''}`) || {};
-      const currentPrice = sp.current_price || null;
-      const currentValue = sp.current_value || null;
+      const currentPrice = sp.current_price ?? null;
+      const currentValue = sp.current_value ?? null;
       const costBasis = row.cost_basis;
       const totalCost = costBasis != null ? costBasis * row.quantity : null;
       const gainLoss = currentValue != null && totalCost != null ? currentValue - totalCost : null;
@@ -551,6 +429,9 @@ app.get('/api/history/:symbol', (req, res) => {
 
 export { app };
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+  await seedDefaultUser();
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
