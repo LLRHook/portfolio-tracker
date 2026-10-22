@@ -429,7 +429,17 @@ app.get('/api/history/:symbol', (req, res) => {
 
 export { app };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
+function isMainModule() {
+  if (!process.argv[1] || process.argv[1] === '-') return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    // Imported modules can be hosted by stdin, virtual, or removed entrypoints.
+    return false;
+  }
+}
+
+if (isMainModule()) {
   await seedDefaultUser();
   app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);

@@ -89,6 +89,10 @@ Malformed numeric fields, duplicate positions, and invalid snapshot dates return
 a validation error before existing portfolio data is replaced. Optional prices
 and cost basis may be blank or `--`; an unreported equity cost basis stays unknown.
 Quoted fields support commas, escaped quotes, and embedded newlines on the server.
+Fidelity data disclaimers, informational export footers, and download-date records
+are recognized separately from positions, including prose containing commas.
+Position validation continues after footer records so malformed rows still reject
+the entire import without changing stored portfolio data.
 
 ### Regression tests
 

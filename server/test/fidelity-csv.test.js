@@ -23,6 +23,30 @@ test('parse a synthetic export with quoted currency, fractions, and a dated foot
   assert.equal(parsed.holdings[0].lastPriceChange, -0.25);
 });
 
+test('preserve positions when comma-containing disclaimer records follow the table', () => {
+  for (const disclaimer of [
+    'This synthetic export is informational, values may change, consult your statements.',
+    'The data and information in this spreadsheet is provided solely for your use, may change, and is informational.',
+    '** Pricing information is indicative, may be delayed, and is subject to change.',
+  ]) {
+    const input = csv().replace('Date downloaded', `${disclaimer}\r\nDate downloaded`);
+    assert.deepEqual(parseFidelityCsv(input), parseFidelityCsv(csv()));
+  }
+});
+
+test('keep validating real position rows before and after disclaimer records', () => {
+  const disclaimer = 'This synthetic export is informational, values may change, consult your statements.';
+  for (const malformed of [
+    '123456789,Fixture Account,OTHER,Example,2',
+    'invalid account,Fixture Account,OTHER,Example,2,10,0,20,8',
+    '123456789,Fixture Account,OTHER,Example,2oops,10,0,20,8',
+  ]) {
+    for (const records of [`${malformed}\n\n${disclaimer}`, `${disclaimer}\n${malformed}`]) {
+      assert.throws(() => parseFidelityCsv(csv().replace('Date downloaded', `${records}\nDate downloaded`)), /row \d+/i);
+    }
+  }
+});
+
 for (const [field, value] of [
   ['quantity', '12oops'], ['quantity', 'Infinity'], ['quantity', '1e309'],
   ['quantity', ''], ['value', '125oops'], ['value', 'Infinity'],

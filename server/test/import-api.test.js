@@ -46,6 +46,7 @@ after(async () => {
 const headers = 'Account Number,Account Name,Symbol,Description,Quantity,Last Price,Last Price Change,Current Value,Average Cost Basis';
 const fixtureRow = '123456789,Fixture Account,TEST,Example Company,2,$10.00,-$1.00,$20.00,$8.00';
 const fixtureCsv = `${headers}\n${fixtureRow}\n\nDate downloaded Oct-21-2026`;
+const disclaimer = 'This synthetic export is informational, values may change, consult your statements.';
 
 async function upload(text) {
   const body = new FormData();
@@ -74,6 +75,18 @@ test('import synthetic data through HTTP and expose consistent holdings and hist
   assert.equal(history.benchmark[0].spValue, 16);
 });
 
+test('import comma-containing disclaimer footers without changing portfolio results', async () => {
+  const response = await upload(fixtureCsv.replace('Date downloaded', `${disclaimer}\nDate downloaded`));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { imported: 1, snapshotDate: '2026-10-21', spyShares: 0.16 });
+  const data = await backupData();
+  assert.equal(data.holdings.length, 1);
+  assert.equal(data.holdings[0].symbol, 'TEST');
+  assert.equal(data.snapshots.length, 1);
+  assert.equal(data.dailyTotals.length, 1);
+  assert.equal(data.closedPositions.length, 0);
+});
+
 for (const [name, invalidCsv, expectedError] of [
   ['malformed quantity', fixtureCsv.replace(',2,', ',12oops,'), /Quantity.*row 2/],
   ['malformed value', fixtureCsv.replace('$20.00', 'Infinity'), /Current Value.*row 2/],
@@ -83,6 +96,9 @@ for (const [name, invalidCsv, expectedError] of [
   ['header without holdings', headers, /No valid holdings/],
   ['invalid snapshot date', fixtureCsv.replace('Oct-21-2026', 'Feb-31-2026'), /date/],
   ['numeric overflow', fixtureCsv.replace(',2,', `,1${'0'.repeat(308)},`), /numeric range/],
+  ['malformed position before disclaimer', fixtureCsv.replace('Date downloaded', `123456789,Fixture Account,OTHER,Example,2\n${disclaimer}\nDate downloaded`), /column count.*row/],
+  ['malformed position after disclaimer', fixtureCsv.replace('Date downloaded', `${disclaimer}\n123456789,Fixture Account,OTHER,Example,2oops,10,0,20,8\nDate downloaded`), /Quantity.*row/],
+  ['invalid account before disclaimer', fixtureCsv.replace('Date downloaded', `invalid account,Fixture Account,OTHER,Example,2,10,0,20,8\n${disclaimer}\nDate downloaded`), /Account Number.*row/],
 ]) {
   test(`reject ${name} with a 400 and preserve all existing portfolio data`, async () => {
     assert.equal((await upload(fixtureCsv.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);

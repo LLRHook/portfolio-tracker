@@ -7,6 +7,32 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 
+for (const entrypoint of ['-', 'missing-entrypoint.js']) {
+  test(`import the app with a non-file entrypoint ${entrypoint} without listening or seeding`, () => {
+    const source = `
+      import assert from 'node:assert/strict';
+      import express from 'express';
+      express.application.listen = () => { throw new Error('Import started a listener'); };
+      process.argv[1] = ${JSON.stringify(entrypoint)};
+      const { app } = await import('./server.js');
+      const { db, getUserCount } = await import('./db.js');
+      assert.equal(typeof app.listen, 'function');
+      assert.equal(getUserCount(), 0, 'Import seeded a user');
+      db.close();
+      console.log('App imported without startup side effects');
+    `;
+    const output = execFileSync(process.execPath, ['--input-type=module', '-'], {
+      input: source,
+      cwd: new URL('..', import.meta.url),
+      env: { ...process.env, DATABASE_PATH: ':memory:', DOTENV_CONFIG_PATH: '/dev/null' },
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: 'pipe',
+    });
+    assert.equal(output.trim(), 'App imported without startup side effects');
+  });
+}
+
 for (const legacy of [false, true]) {
   test(`${legacy ? 'upgrade a legacy' : 'initialize a fresh'} database with benchmark shares`, () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'portfolio-schema-'));

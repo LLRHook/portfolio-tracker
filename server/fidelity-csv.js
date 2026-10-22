@@ -72,6 +72,13 @@ function parseSnapshotDate(text) {
   return date;
 }
 
+function isFooterRecord(fields) {
+  // Unquoted disclaimer prose can contain commas, so its later fields may
+  // occupy the Symbol column. Recognize the record by its opening text instead.
+  const first = fields[0] ?? '';
+  return /^(?:The data and information\b|This\b.*\bexport\b.*\binformational\b|\*\*|Date downloaded\b)/i.test(first);
+}
+
 export function parseFidelityCsv(csvText) {
   const records = parseRecords(csvText.replace(/^\uFEFF/, ''));
   const headers = (records.shift() ?? []).map(h => h.trim().toLowerCase());
@@ -83,9 +90,10 @@ export function parseFidelityCsv(csvText) {
   const holdings = [];
   const positions = new Set();
   for (const [offset, fields] of records.entries()) {
+    if (isFooterRecord(fields)) continue;
     const cell = name => fields[index(name)] ?? '';
     const rawSymbol = cell('Symbol');
-    // Fidelity disclaimers and blank records have no symbol/account columns.
+    // Blank records, column labels, and symbol-column footnotes are not positions.
     if (!rawSymbol || rawSymbol.startsWith('**') || rawSymbol.toLowerCase() === 'symbol') continue;
     const row = offset + 2;
     if (fields.length !== headers.length) throw new CsvImportError(`Unexpected column count in CSV row ${row}`);
