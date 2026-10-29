@@ -38,3 +38,7 @@ jobs:
       - name: Server syntax check
         working-directory: server
         run: node --check server.js
+
+      - name: Server regression tests
+        working-directory: server
+        run: npm test
