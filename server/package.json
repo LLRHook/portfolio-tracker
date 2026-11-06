@@ -4,7 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:csv": "node scripts/build-csv.js",
+    "test:rust": "cargo test --locked --manifest-path rust/fidelity-csv/Cargo.toml",
+    "pretest": "npm run build:csv",
+    "test": "node --test",
+    "predev": "npm run build:csv",
     "dev": "node --watch server.js",
+    "prestart": "npm run build:csv",
     "start": "node server.js"
   },
   "dependencies": {

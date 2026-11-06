@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.NODE_ENV === 'production' ? '/app/data' : __dirname;
-const db = new Database(path.join(dataDir, 'portfolio.db'));
+const db = new Database(process.env.DATABASE_PATH || path.join(dataDir, 'portfolio.db'));
 
 db.pragma('journal_mode = WAL');
 
@@ -38,9 +38,6 @@ db.exec(`
 try {
   db.exec('ALTER TABLE holdings ADD COLUMN last_price_change REAL');
 } catch (_) { /* column already exists */ }
-try {
-  db.exec('ALTER TABLE daily_totals ADD COLUMN spy_shares REAL DEFAULT 0');
-} catch (_) { /* column already exists */ }
 
 // --- Encryption helpers ---
 const ALGORITHM = 'aes-256-gcm';
@@ -67,16 +64,57 @@ function decrypt(ciphertext) {
 }
 
 // --- Holdings CRUD ---
-const upsertHoldingStmt = db.prepare(`
-  INSERT INTO holdings (user_id, symbol, description, quantity, cost_basis, last_price_change, account_name)
-  VALUES (?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(user_id, symbol, account_name) DO UPDATE SET
-    description = excluded.description,
-    quantity = excluded.quantity,
-    cost_basis = excluded.cost_basis,
-    last_price_change = excluded.last_price_change,
-    imported_at = datetime('now')
-`);
+function ambiguousAccountError(table) {
+  return new Error(`Ambiguous rows for an unnamed account in ${table}; resolve duplicate records before retrying`);
+}
+
+// SQLite UNIQUE keys do not conflict on NULL. Keep named-account UPSERTs, and
+// serialize the NULL lookup/update/insert under a write lock (or the caller's
+// transaction savepoint). Existing ambiguous rows must never be silently merged.
+function prepareAccountUpsert(table, columns, keys, updates, refreshImportTime = false) {
+  const refresh = refreshImportTime ? ", imported_at = datetime('now')" : '';
+  const insert = db.prepare(`INSERT INTO ${table} (${columns.join(', ')})
+    VALUES (${columns.map(() => '?').join(', ')})
+    ON CONFLICT(${keys.join(', ')}) DO UPDATE SET
+      ${updates.map(column => `${column} = excluded.${column}`).join(', ')}${refresh}`);
+  const find = db.prepare(`SELECT id FROM ${table}
+    WHERE ${keys.map(column => `${column} IS ?`).join(' AND ')} LIMIT 2`);
+  const update = db.prepare(`UPDATE ${table} SET
+    ${updates.map(column => `${column} = ?`).join(', ')}${refresh} WHERE id = ?`);
+  const keyIndices = keys.map(column => columns.indexOf(column));
+  const updateIndices = updates.map(column => columns.indexOf(column));
+  const accountIndex = columns.indexOf('account_name');
+  const writeUnnamed = db.transaction(values => {
+    const matches = find.all(...keyIndices.map(index => values[index]));
+    if (matches.length > 1) throw ambiguousAccountError(table);
+    if (matches.length === 0) return insert.run(...values);
+    return update.run(...updateIndices.map(index => values[index]), matches[0].id);
+  });
+  return {
+    run(...values) {
+      return values[accountIndex] === null ? writeUnnamed.immediate(values) : insert.run(...values);
+    },
+  };
+}
+
+function assertUnambiguousUnnamedRows(rows, keys, table) {
+  const seen = new Set();
+  for (const row of rows) {
+    if (row.account_name != null) continue;
+    const key = JSON.stringify(keys.map(column => row[column]));
+    if (seen.has(key)) throw ambiguousAccountError(table);
+    seen.add(key);
+  }
+}
+
+export function assertUnambiguousPositions(rows, table = 'holdings') {
+  assertUnambiguousUnnamedRows(rows, ['symbol'], table);
+}
+
+const upsertHoldingStmt = prepareAccountUpsert('holdings',
+  ['user_id', 'symbol', 'description', 'quantity', 'cost_basis', 'last_price_change', 'account_name'],
+  ['user_id', 'symbol', 'account_name'],
+  ['description', 'quantity', 'cost_basis', 'last_price_change'], true);
 
 const getHoldingsStmt = db.prepare('SELECT * FROM holdings WHERE user_id = ?');
 const deleteHoldingsStmt = db.prepare('DELETE FROM holdings WHERE user_id = ?');
@@ -149,9 +187,15 @@ db.exec(`
     total_cost REAL NOT NULL,
     day_gain_loss REAL,
     holdings_count INTEGER,
+    spy_shares REAL DEFAULT 0,
     UNIQUE(user_id, snapshot_date)
   )
 `);
+
+// Create the table before migrating existing databases and preparing statements.
+if (!db.pragma('table_info(daily_totals)').some(column => column.name === 'spy_shares')) {
+  db.exec('ALTER TABLE daily_totals ADD COLUMN spy_shares REAL DEFAULT 0');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS closed_positions (
@@ -169,16 +213,10 @@ db.exec(`
 `);
 
 // --- Snapshot CRUD ---
-const insertSnapshotStmt = db.prepare(`
-  INSERT INTO snapshots (user_id, snapshot_date, symbol, description, quantity, cost_basis, current_price, current_value, account_name)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(user_id, snapshot_date, symbol, account_name) DO UPDATE SET
-    description = excluded.description,
-    quantity = excluded.quantity,
-    cost_basis = excluded.cost_basis,
-    current_price = excluded.current_price,
-    current_value = excluded.current_value
-`);
+const insertSnapshotStmt = prepareAccountUpsert('snapshots',
+  ['user_id', 'snapshot_date', 'symbol', 'description', 'quantity', 'cost_basis', 'current_price', 'current_value', 'account_name'],
+  ['user_id', 'snapshot_date', 'symbol', 'account_name'],
+  ['description', 'quantity', 'cost_basis', 'current_price', 'current_value']);
 
 const insertDailyTotalStmt = db.prepare(`
   INSERT INTO daily_totals (user_id, snapshot_date, total_value, total_cost, day_gain_loss, holdings_count, spy_shares)
@@ -278,6 +316,9 @@ export function getAllDailyTotals(userId) {
 }
 
 export function restoreUserData(userId, holdings, snapshots, dailyTotals, closedPositions) {
+  assertUnambiguousPositions(holdings);
+  assertUnambiguousUnnamedRows(snapshots, ['snapshot_date', 'symbol'], 'snapshots');
+  assertUnambiguousUnnamedRows(closedPositions ?? [], ['close_date', 'symbol'], 'closed_positions');
   const restore = db.transaction(() => {
     deleteHoldingsStmt.run(userId);
     db.prepare('DELETE FROM snapshots WHERE user_id = ?').run(userId);
@@ -305,19 +346,14 @@ export function restoreUserData(userId, holdings, snapshots, dailyTotals, closed
         d.day_gain_loss ?? null, d.holdings_count ?? null, d.spy_shares ?? 0);
     }
   });
-  restore();
+  restore.immediate();
 }
 
 // --- Closed Positions ---
-const insertClosedPositionStmt = db.prepare(`
-  INSERT INTO closed_positions (user_id, symbol, description, quantity, cost_basis, last_price, close_date, account_name)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(user_id, symbol, close_date, account_name) DO UPDATE SET
-    description = excluded.description,
-    quantity = excluded.quantity,
-    cost_basis = excluded.cost_basis,
-    last_price = excluded.last_price
-`);
+const insertClosedPositionStmt = prepareAccountUpsert('closed_positions',
+  ['user_id', 'symbol', 'description', 'quantity', 'cost_basis', 'last_price', 'close_date', 'account_name'],
+  ['user_id', 'symbol', 'close_date', 'account_name'],
+  ['description', 'quantity', 'cost_basis', 'last_price']);
 
 const getClosedPositionsStmt = db.prepare(
   'SELECT * FROM closed_positions WHERE user_id = ? ORDER BY close_date DESC, symbol'
