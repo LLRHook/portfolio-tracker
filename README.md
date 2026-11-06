@@ -100,6 +100,25 @@ are recognized separately from positions, including prose containing commas.
 Position validation continues after footer records so malformed rows still reject
 the entire import without changing stored portfolio data.
 
+Repeated imports update one snapshot per user, date, symbol and account name,
+including unnamed accounts. Missing, blank and whitespace-only CSV account names
+become SQL NULL; the literal account name `null` remains a name. Storage also
+preserves an explicit empty account name from a backup as distinct from NULL.
+Holdings and closed-position writes use the same account identity, with close
+date included for closed positions. Import state reads and writes share one
+SQLite write transaction after the benchmark quote is fetched, so concurrent
+imports use the state committed before their transaction starts.
+
+Older databases may already contain multiple unnamed rows for the same key.
+There is no automatic deletion, merging or historical-data migration. Imports
+that encounter ambiguous current holdings, latest snapshot prices, or a target
+snapshot/closed-position key fail atomically with the existing HTTP 500 import
+error; those duplicate records need explicit review before retrying. Other
+historical duplicates remain stored. Backups containing duplicate unnamed keys
+are also rejected before restore replaces any records. These safeguards apply
+to application writers; the unchanged SQLite schema alone does not prevent
+someone inserting NULL-account duplicates with raw SQL.
+
 `POST /api/import` sends each entire upload to the Rust processor over stdin and
 awaits its validated holdings and snapshot date before calculating totals or
 writing to SQLite. There is one process per file, with no JavaScript parsing
@@ -130,7 +149,12 @@ The tests use synthetic CSV records, temporary or in-memory SQLite databases,
 and mocked benchmark responses. A frozen test-only JavaScript reference checks
 Rust parity for quoting, whitespace, dates, optional fields and error messages.
 HTTP tests cover validation before writes, repeated dated imports and rollback
-after a simulated SQLite failure. They do not load local `.env` files, read
+after a simulated SQLite failure. Import integrity regressions exercise blank,
+missing and explicit-null account identities, empty-account backup compatibility,
+legacy ambiguity, restart persistence, and concurrent independent SQLite/HTTP
+connections through the required Rust processor. HTTP fixtures use synthetic
+sessions and ephemeral loopback ports without starting the default-user seeder.
+They do not load local `.env` files, read
 account data, or contact market data services. CI builds the native processor
 and runs the server tests on Node 22. Native npm modules such as `better-sqlite3`
 must be installed using the same Node major version used to run the tests.

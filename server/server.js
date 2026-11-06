@@ -10,7 +10,7 @@ import { CsvImportError, parseFidelityCsv } from './fidelity-csv.js';
 import { fetchSpyPriceOnDate, fetchSpyHistory } from './quotes.js';
 import {
   db,
-  upsertHolding, getHoldings, deleteHoldings, hasHoldings,
+  upsertHolding, getHoldings, deleteHoldings, hasHoldings, assertUnambiguousPositions,
   createUser, findUser, getUserCount,
   insertSnapshot, insertDailyTotal, getDailyTotals, getHoldingHistory,
   getPreviousDailyTotal, getLatestSnapshotPrices,
@@ -97,6 +97,10 @@ function getUserId(req) {
   return req.session.username || 'default-user';
 }
 
+function positionKey(symbol, accountName) {
+  return JSON.stringify([symbol, accountName ?? null]);
+}
+
 app.get('/api/status', (req, res) => {
   const userId = getUserId(req);
   const linked = hasHoldings(userId);
@@ -130,49 +134,48 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
       throw new CsvImportError('CSV portfolio totals exceed the supported numeric range');
     }
 
-    // Daily change = simple diff of total portfolio value vs previous day
-    const prev = getPreviousDailyTotal(userId, snapshotDate);
-    const totalDayChange = prev ? totalValue - prev.total_value : 0;
-
-    // SPY shares calculation (buy-and-hold benchmark)
-    let spyShares = 0;
+    // Fetch external data before acquiring SQLite's write lock. All reads that
+    // depend on prior imports belong inside the same transaction as the writes.
+    let spyPrice = null;
     try {
-      const spyPrice = await fetchSpyPriceOnDate(snapshotDate);
-      if (!prev || !prev.spy_shares) {
+      spyPrice = await fetchSpyPriceOnDate(snapshotDate);
+    } catch (err) {
+      console.error('SPY price fetch failed during import:', err.message);
+    }
+
+    const importTransaction = db.transaction(() => {
+      const prev = getPreviousDailyTotal(userId, snapshotDate);
+      const totalDayChange = prev ? totalValue - prev.total_value : 0;
+
+      // SPY shares calculation (buy-and-hold benchmark)
+      let spyShares = prev?.spy_shares ?? 0;
+      if (spyPrice !== null && (!prev || !prev.spy_shares)) {
         // First import or first after upgrade: buy all in
         spyShares = totalCost / spyPrice;
-      } else if (totalCost > prev.total_cost) {
+      } else if (spyPrice !== null && totalCost > prev.total_cost) {
         // New capital added: buy additional SPY shares
         const delta = totalCost - prev.total_cost;
         spyShares = prev.spy_shares + (delta / spyPrice);
-      } else {
-        // Same or less capital: hold (never sell)
-        spyShares = prev.spy_shares;
       }
-    } catch (err) {
-      console.error('SPY price fetch failed during import:', err.message);
-      spyShares = prev?.spy_shares ?? 0;
-    }
 
-    // Detect sold positions before clearing holdings
-    const previousHoldings = getHoldings(userId);
-    const newSymbols = new Set(holdings.map(h => `${h.symbol}:${h.accountName ?? ''}`));
-    const sold = previousHoldings.filter(h => !newSymbols.has(`${h.symbol}:${h.account_name ?? ''}`));
+      // Detect sold positions before clearing holdings, preserving NULL vs ''.
+      const previousHoldings = getHoldings(userId);
+      assertUnambiguousPositions(previousHoldings);
+      const newSymbols = new Set(holdings.map(h => positionKey(h.symbol, h.accountName)));
+      const sold = previousHoldings.filter(h => !newSymbols.has(positionKey(h.symbol, h.account_name)));
 
-    // Estimate sale price for sold positions using last known snapshot price
-    const snapshotPrices = getLatestSnapshotPrices(userId);
-    const priceMap = new Map();
-    for (const sp of snapshotPrices) {
-      priceMap.set(`${sp.symbol}:${sp.account_name ?? ''}`, sp);
-    }
+      // Estimate sale price for sold positions using last known snapshot price
+      const snapshotPrices = getLatestSnapshotPrices(userId);
+      assertUnambiguousPositions(snapshotPrices, 'snapshots');
+      const priceMap = new Map();
+      for (const sp of snapshotPrices) {
+        priceMap.set(positionKey(sp.symbol, sp.account_name), sp);
+      }
 
-    const soldEstimates = sold.map(s => {
-      const sp = priceMap.get(`${s.symbol}:${s.account_name ?? ''}`);
-      return { ...s, estimatedSalePrice: sp?.current_price ?? s.cost_basis };
-    });
-
-    // Wrap all DB writes in a single transaction for atomicity and performance
-    const importTransaction = db.transaction(() => {
+      const soldEstimates = sold.map(s => {
+        const sp = priceMap.get(positionKey(s.symbol, s.account_name));
+        return { ...s, estimatedSalePrice: sp?.current_price ?? s.cost_basis };
+      });
       // Log closed positions with estimated sale prices
       for (const s of soldEstimates) {
         insertClosedPosition(userId, {
@@ -198,8 +201,9 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
         holdingsCount: holdings.length,
         spyShares,
       });
+      return spyShares;
     });
-    importTransaction();
+    const spyShares = importTransaction.immediate();
 
     res.json({ imported: holdings.length, snapshotDate, spyShares });
   } catch (err) {
@@ -225,11 +229,11 @@ app.get('/api/holdings', (req, res) => {
     const snapshotPrices = getLatestSnapshotPrices(userId);
     const priceMap = new Map();
     for (const sp of snapshotPrices) {
-      priceMap.set(`${sp.symbol}:${sp.account_name || ''}`, sp);
+      priceMap.set(positionKey(sp.symbol, sp.account_name), sp);
     }
 
     const result = rows.map(row => {
-      const sp = priceMap.get(`${row.symbol}:${row.account_name || ''}`) || {};
+      const sp = priceMap.get(positionKey(row.symbol, row.account_name)) || {};
       const currentPrice = sp.current_price ?? null;
       const currentValue = sp.current_value ?? null;
       const costBasis = row.cost_basis;

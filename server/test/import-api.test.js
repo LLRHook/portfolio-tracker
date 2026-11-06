@@ -10,6 +10,8 @@ writeFileSync(envPath, '');
 // Never load the developer's .env or portfolio database.
 process.env.DOTENV_CONFIG_PATH = envPath;
 process.env.DATABASE_PATH = path.join(directory, 'fixture.db');
+process.env.ENCRYPTION_KEY = '12'.repeat(32);
+process.env.SESSION_SECRET = 'synthetic-import-api-secret';
 const { app } = await import('../server.js');
 const { db } = await import('../db.js');
 const httpFetch = globalThis.fetch;
@@ -152,23 +154,47 @@ test('reimport the same dated CSV without duplicating snapshots, totals or sold 
   assert.equal(after.closedPositions.length, 1);
 });
 
-test('roll back every import write if SQLite fails after a valid Rust result', async () => {
-  assert.equal((await upload(fixtureCsv.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);
-  const before = await backupData();
-  db.exec(`CREATE TEMP TRIGGER fail_synthetic_snapshot BEFORE INSERT ON snapshots
-    WHEN NEW.symbol = 'FAIL' BEGIN SELECT RAISE(ABORT, 'Synthetic snapshot failure'); END`);
-  try {
-    const input = `${headers}\n${fixtureRow}\n${fixtureRow.replace(',TEST,', ',FAIL,')}\nDate downloaded Oct-21-2026`;
-    const response = await upload(input);
+for (const [account, inputCsv] of [['named', fixtureCsv], ['unnamed', fixtureCsv.replace('Fixture Account', '')]]) {
+  test(`roll back every ${account} import write if SQLite fails after a valid Rust result`, async () => {
+    assert.equal((await upload(inputCsv.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);
+    const before = await backupData();
+    db.exec(`CREATE TEMP TRIGGER fail_synthetic_snapshot BEFORE INSERT ON snapshots
+      WHEN NEW.symbol = 'FAIL' BEGIN SELECT RAISE(ABORT, 'Synthetic snapshot failure'); END`);
+    try {
+      const row = inputCsv.split('\n')[1];
+      const input = `${headers}\n${row}\n${row.replace(',TEST,', ',FAIL,')}\nDate downloaded Oct-21-2026`;
+      const response = await upload(input);
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), { error: 'Failed to import CSV' });
+      // Includes an attempted closed position, deleted holdings, a first new
+      // holding/snapshot and the failed second row: none may survive the rollback.
+      assert.deepEqual(await backupData(), before);
+    } finally {
+      db.exec('DROP TRIGGER fail_synthetic_snapshot');
+    }
+  });
+}
+
+for (const table of ['holdings', 'snapshots', 'closed_positions']) {
+  test(`reject ambiguous legacy unnamed ${table} without changing the portfolio`, async () => {
+    const unnamed = fixtureCsv.replace('Fixture Account', '');
+    assert.equal((await upload(unnamed.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);
+    if (table === 'holdings') {
+      db.exec("INSERT INTO holdings (user_id, symbol, quantity) VALUES ('admin', 'SOLD', 9)");
+    } else if (table === 'snapshots') {
+      db.exec(`INSERT INTO snapshots (user_id, snapshot_date, symbol, quantity)
+        VALUES ('admin', '2026-10-21', 'TEST', 1), ('admin', '2026-10-21', 'TEST', 9)`);
+    } else {
+      db.exec(`INSERT INTO closed_positions (user_id, close_date, symbol, quantity)
+        VALUES ('admin', '2026-10-21', 'SOLD', 1), ('admin', '2026-10-21', 'SOLD', 9)`);
+    }
+    const before = await backupData();
+    const response = await upload(unnamed);
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: 'Failed to import CSV' });
-    // Includes an attempted closed position, deleted holdings, a first new
-    // holding/snapshot and the failed second row: none may survive the rollback.
     assert.deepEqual(await backupData(), before);
-  } finally {
-    db.exec('DROP TRIGGER fail_synthetic_snapshot');
-  }
-});
+  });
+}
 
 test('native processor failure returns the existing 500 schema before quotes or DB writes', async () => {
   assert.equal((await upload(fixtureCsv)).status, 200);

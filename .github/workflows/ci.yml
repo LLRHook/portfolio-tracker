@@ -58,4 +58,10 @@ jobs:
 
       - name: Server regression tests
         working-directory: server
+        env:
+          NODE_ENV: test
+          DATABASE_PATH: ':memory:'
+          DOTENV_CONFIG_PATH: /dev/null
+          ENCRYPTION_KEY: '1212121212121212121212121212121212121212121212121212121212121212'
+          SESSION_SECRET: synthetic-ci-session-secret
         run: npm test
