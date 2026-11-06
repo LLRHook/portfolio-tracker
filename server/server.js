@@ -111,7 +111,7 @@ app.post('/api/import', upload.single('file'), async (req, res) => {
     }
 
     const csvText = req.file.buffer.toString('utf-8');
-    const { holdings, snapshotDate } = parseFidelityCsv(csvText);
+    const { holdings, snapshotDate } = await parseFidelityCsv(csvText);
 
     if (holdings.length === 0) {
       return res.status(400).json({ error: 'No valid holdings found in CSV' });

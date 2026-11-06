@@ -22,6 +22,7 @@ A self-hosted portfolio dashboard for tracking brokerage holdings with live mark
 |-------|------|
 | Frontend | React 19, Vite, Tailwind CSS v4, Recharts |
 | Backend | Express 5, better-sqlite3 |
+| CSV processor | Rust 1.93+, built with Cargo |
 | Auth | bcrypt, express-session |
 | Infra | Docker Compose, Node 22 |
 
@@ -47,6 +48,11 @@ Open **http://localhost:34891** and log in with `admin` / `admin`.
 > Change the default password after first login, or set a custom one by modifying the seed logic in `server/server.js`.
 
 ## Quick Start (Local)
+
+Install Node.js 22 and Rust 1.93 or newer (including Cargo). The local server's
+`dev`, `start`, and `test` npm scripts build the required native CSV processor
+before running. Docker builds it in a separate Rust stage; the running image
+does not need Cargo.
 
 ```bash
 # Install dependencies
@@ -94,18 +100,47 @@ are recognized separately from positions, including prose containing commas.
 Position validation continues after footer records so malformed rows still reject
 the entire import without changing stored portfolio data.
 
+`POST /api/import` sends each entire upload to the Rust processor over stdin and
+awaits its validated holdings and snapshot date before calculating totals or
+writing to SQLite. There is one process per file, with no JavaScript parsing
+fallback. CSV contents are not passed on the command line or written to a
+temporary CSV file. Missing download dates use the server's current UTC date.
+CSV validation still returns HTTP 400 with `{ "error": "..." }`; a missing or
+failed processor returns HTTP 500 with `{ "error": "Failed to import CSV" }`.
+The native response is limited to 64 MiB and processing to 30 seconds; exceeding
+either limit also returns that 500 response without changing portfolio data.
+
+Express routes, authentication, encryption helpers, SQLite transactions, benchmark
+calculations and the React UI remain JavaScript. Only CSV tokenization and import
+validation run in Rust.
+
 ### Regression tests
 
 ```bash
 npm --prefix server ci
+npm --prefix server run test:rust
 npm --prefix server test
+cargo fmt --manifest-path server/rust/fidelity-csv/Cargo.toml --check
+cargo clippy --locked --manifest-path server/rust/fidelity-csv/Cargo.toml --all-targets -- -D warnings
 npm --prefix client ci
 npm --prefix client run build
 ```
 
 The tests use synthetic CSV records, temporary or in-memory SQLite databases,
-and mocked benchmark responses. They do not load local `.env` files, read account
-data, or contact market data services. CI runs the server tests on Node 22.
+and mocked benchmark responses. A frozen test-only JavaScript reference checks
+Rust parity for quoting, whitespace, dates, optional fields and error messages.
+HTTP tests cover validation before writes, repeated dated imports and rollback
+after a simulated SQLite failure. They do not load local `.env` files, read
+account data, or contact market data services. CI builds the native processor
+and runs the server tests on Node 22. Native npm modules such as `better-sqlite3`
+must be installed using the same Node major version used to run the tests.
+
+To build just the native executable, run `npm --prefix server run build:csv`.
+It copies Cargo's release artifact to `server/bin/` and honors `CARGO_TARGET_DIR`.
+For a prebuilt deployment, run `node server.js` from `server/` with
+`FIDELITY_CSV_BIN` pointing to the platform's executable. Compose uses a Linux
+binary in `/usr/local/bin`, outside its `/app` source bind mount; rebuild the
+server image after changing Rust sources.
 
 ## Project Structure
 
@@ -119,7 +154,9 @@ portfolio-tracker/
 │   └── Dockerfile
 ├── server/                 # Express backend
 │   ├── server.js           # API routes and Yahoo Finance integration
-│   ├── fidelity-csv.js     # CSV parsing and import validation
+│   ├── fidelity-csv.js     # Async native CSV processor bridge
+│   ├── rust/fidelity-csv/  # Rust CSV parsing, validation and JSON CLI
+│   ├── scripts/           # Native build/artifact installation
 │   ├── db.js               # SQLite schema, encryption helpers, CRUD
 │   ├── test/               # Fixture-only parser, database, and HTTP regressions
 │   └── Dockerfile
@@ -136,6 +173,7 @@ portfolio-tracker/
 | `ENCRYPTION_KEY` | 32-byte hex key for AES-256-GCM | *required* |
 | `SESSION_SECRET` | Express session secret | `dev-secret-change-me` |
 | `DATABASE_PATH` | Optional SQLite file path (`:memory:` for isolated tests) | `server/portfolio.db`, or `/app/data/portfolio.db` in production |
+| `FIDELITY_CSV_BIN` | Path to the required native CSV processor | Built executable in `server/bin/`; `/usr/local/bin/portfolio-fidelity-csv` in Docker |
 
 ## License
 

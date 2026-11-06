@@ -6,6 +6,8 @@ dist/
 *.db-shm
 *.db-wal
 server/data/
+server/bin/
+server/rust/**/target/
 
 # Claude Code local context
 CLAUDE.md

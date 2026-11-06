@@ -9,7 +9,7 @@ const envPath = path.join(directory, 'empty.env');
 writeFileSync(envPath, '');
 // Never load the developer's .env or portfolio database.
 process.env.DOTENV_CONFIG_PATH = envPath;
-process.env.DATABASE_PATH = ':memory:';
+process.env.DATABASE_PATH = path.join(directory, 'fixture.db');
 const { app } = await import('../server.js');
 const { db } = await import('../db.js');
 const httpFetch = globalThis.fetch;
@@ -131,4 +131,66 @@ test('keep unreported equity cost basis unknown through the API', async () => {
   const [holding] = await (await httpFetch(`${baseUrl}/holdings`)).json();
   assert.equal(holding.costBasis, null);
   assert.equal(holding.gainLoss, null);
+});
+
+test('reimport the same dated CSV without duplicating snapshots, totals or sold positions', async () => {
+  assert.equal((await upload(fixtureCsv.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);
+  const first = await upload(fixtureCsv);
+  assert.equal(first.status, 200);
+  const result = await first.json();
+  const before = await backupData();
+  const repeat = await upload(fixtureCsv);
+  assert.equal(repeat.status, 200);
+  assert.deepEqual(await repeat.json(), result);
+  const after = await backupData();
+  // imported_at is an intentional refresh timestamp, not imported portfolio data.
+  const withoutImportTime = data => ({ ...data, holdings: data.holdings.map(({ imported_at, ...holding }) => holding) });
+  assert.deepEqual(withoutImportTime(after), withoutImportTime(before));
+  assert.equal(after.holdings.length, 1);
+  assert.equal(after.snapshots.length, 2);
+  assert.equal(after.dailyTotals.length, 2);
+  assert.equal(after.closedPositions.length, 1);
+});
+
+test('roll back every import write if SQLite fails after a valid Rust result', async () => {
+  assert.equal((await upload(fixtureCsv.replace(',TEST,', ',SOLD,').replace('Oct-21-2026', 'Oct-20-2026'))).status, 200);
+  const before = await backupData();
+  db.exec(`CREATE TEMP TRIGGER fail_synthetic_snapshot BEFORE INSERT ON snapshots
+    WHEN NEW.symbol = 'FAIL' BEGIN SELECT RAISE(ABORT, 'Synthetic snapshot failure'); END`);
+  try {
+    const input = `${headers}\n${fixtureRow}\n${fixtureRow.replace(',TEST,', ',FAIL,')}\nDate downloaded Oct-21-2026`;
+    const response = await upload(input);
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to import CSV' });
+    // Includes an attempted closed position, deleted holdings, a first new
+    // holding/snapshot and the failed second row: none may survive the rollback.
+    assert.deepEqual(await backupData(), before);
+  } finally {
+    db.exec('DROP TRIGGER fail_synthetic_snapshot');
+  }
+});
+
+test('native processor failure returns the existing 500 schema before quotes or DB writes', async () => {
+  assert.equal((await upload(fixtureCsv)).status, 200);
+  const before = await backupData();
+  const requestsBefore = quoteRequests;
+  const previous = process.env.FIDELITY_CSV_BIN;
+  process.env.FIDELITY_CSV_BIN = path.join(directory, 'missing-processor');
+  try {
+    const response = await upload(fixtureCsv.replace(',TEST,', ',OTHER,'));
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: 'Failed to import CSV' });
+    assert.deepEqual(await backupData(), before);
+    assert.equal(quoteRequests, requestsBefore);
+  } finally {
+    if (previous === undefined) delete process.env.FIDELITY_CSV_BIN;
+    else process.env.FIDELITY_CSV_BIN = previous;
+  }
+});
+
+test('preserve the no-file 400 error schema', async () => {
+  const response = await httpFetch(`${baseUrl}/import`, { method: 'POST', body: new FormData() });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'No file uploaded' });
+  assert.equal(quoteRequests, 0);
 });
