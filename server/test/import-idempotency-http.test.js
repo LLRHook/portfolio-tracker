@@ -153,7 +153,7 @@ test('HTTP: keep distinct users, named accounts and the literal name null separa
   assert.deepEqual(await server.backup('fixture-b'), before);
   assert.equal(before.holdings.length, 3);
   assert.equal(before.snapshots.length, 3);
-  assert.deepEqual(before.holdings.map(row => row.account_name).sort(), ['Named', 'null', null].sort());
+  assert.deepEqual(new Set(before.holdings.map(row => row.account_name)), new Set(['Named', 'null', null]));
   assert.ok(before.holdings.every(row => row.user_id === 'fixture-b'));
 });
 
